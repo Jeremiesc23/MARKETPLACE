@@ -1,0 +1,9 @@
+Qué significa cada archivo
+
+app/_sites/[vertical]/layout.tsx → layout común del sitio de ese vertical (header, menú, etc.)
+
+app/_sites/[vertical]/page.tsx → Home del vertical (Home de bienes, Home de skincare…)
+
+app/_sites/[vertical]/listings/page.tsx → Lista de publicaciones de ese vertical
+
+app/_sites/[vertical]/listings/[id]/page.tsx → Detalle de una publicación

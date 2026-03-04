@@ -1,0 +1,264 @@
+//src/server/modules/listings/listings.service.ts
+import { AppError } from "@/src/server/shared/errors";
+import { listFieldsByCategory } from "../categories/categoryFields.repo";
+import { getCategoryByIdAndVertical, getCategoryBySlugAndVertical } from "@/src/server/modules/categories/categories.repo";
+import { searchPublishedPublic } from "./listings.repo";
+import { countImagesByListingAndSite } from "./listingImages.repo";
+
+import {
+  categoryExistsInVertical,
+  insertDraftListing,
+  updateListingByIdAndSite
+, countImagesByListingIdsAndSite,
+  
+setListingStatus,
+  listByUserAndVertical, getListingByIdAndVertical, listPublishedByVertical, getListingByIdAndSite,listPublishedBySite,publishListingByIdAndSite,
+} from "./listings.repo";
+import { sanitizeAndValidateAttributes } from "./attributes.validator";
+
+
+export async function getPublicListings(siteId: number) {
+  return listPublishedBySite(siteId);
+}
+
+export async function createListingDraft(args: {
+  siteId: number;
+  userId: number;
+  vertical: string;
+  categoryId: number;
+  title: string;
+  description?: string;
+  price?: number;
+  currency: string;
+  locationText?: string;
+}) {
+  const ok = await categoryExistsInVertical(args.categoryId, args.vertical);
+  if (!ok) throw new AppError("Categoría inválida para este vertical", 400);
+
+  return insertDraftListing({
+    siteId: args.siteId,
+    userId: args.userId,
+    categoryId: args.categoryId,
+    title: args.title,
+    description: args.description,
+    price: args.price,
+    currency: args.currency,
+    locationText: args.locationText,
+  });
+}
+export async function getPublicListingsByVertical(vertical: string) {
+  return listPublishedByVertical(vertical);
+}
+export async function updateListingDraft(args: {
+  listingId: number;
+  siteId: number;
+  vertical: string;
+  data: Partial<{
+    categoryId: number;
+    title: string;
+    description: string;
+    price: number | null;
+    currency: string;
+    locationText: string | null;
+
+    // ✅ nuevo
+    attributes: Record<string, any>;
+  }>;
+}) {
+  const current = await getListingByIdAndSite(args.listingId, args.siteId);
+  if (!current) throw new AppError("No existe", 404);
+
+  const nextCategoryId = args.data.categoryId ?? current.category_id;
+
+  // valida vertical si hay category (o si cambió)
+  const ok = await categoryExistsInVertical(Number(nextCategoryId), args.vertical);
+  if (!ok) throw new AppError("Categoría inválida para este vertical", 400);
+
+  // ✅ si vienen attributes, validarlos contra los fields de esa categoría/vertical
+  if (args.data.attributes !== undefined) {
+    const allowed = await listFieldsByCategory(Number(nextCategoryId), args.vertical);
+
+    const categoryChanged =
+      args.data.categoryId !== undefined &&
+      Number(args.data.categoryId) !== Number(current.category_id);
+
+    const currentAttrs =
+      !categoryChanged && current.attributes
+        ? (typeof current.attributes === "string" ? JSON.parse(current.attributes) : current.attributes)
+        : {};
+
+    const incoming = sanitizeAndValidateAttributes(args.data.attributes, allowed, {
+      requireAllRequired: false, // draft: no exigir required
+    });
+
+    // merge si NO cambió categoría; si cambió, resetea
+    args.data.attributes = categoryChanged ? incoming : { ...currentAttrs, ...incoming };
+  }
+
+  const affected = await updateListingByIdAndSite(args.listingId, args.siteId, args.data);
+  if (affected === 0) throw new AppError("No existe", 404);
+}
+
+
+export async function getMyListings(userId: number, vertical: string, siteId: number) {
+  return listByUserAndVertical(userId, vertical, siteId);
+}
+
+export async function getPublicListingById(vertical: string, listingId: number) {
+  const listing = await getListingByIdAndVertical(listingId, vertical);
+  if (!listing) return null;
+  if (listing.status !== "published") return null;
+  return listing;
+}
+export async function getListingForSite(listingId: number, siteId: number) {
+  return getListingByIdAndSite(listingId, siteId);
+}
+export async function publishListing(listingId: number, siteId: number, vertical: string) {
+  const listing = await getListingByIdAndSite(listingId, siteId);
+  if (!listing) throw new AppError("No existe", 404);
+
+  const ok = await categoryExistsInVertical(Number(listing.category_id), vertical);
+  if (!ok) throw new AppError("Categoría inválida para este vertical", 400);
+
+  // ✅ exigir al menos 1 imagen antes de publicar
+  const imgCount = await countImagesByListingAndSite(listingId, siteId);
+  if (imgCount === 0) {
+    throw new AppError("Debes subir al menos 1 imagen antes de publicar", 400);
+  }
+
+  const allowed = await listFieldsByCategory(Number(listing.category_id), vertical);
+
+  const attrs =
+    listing.attributes
+      ? (typeof listing.attributes === "string" ? JSON.parse(listing.attributes) : listing.attributes)
+      : {};
+
+  // ✅ publish: exigir required
+  sanitizeAndValidateAttributes(attrs, allowed, { requireAllRequired: true });
+
+  const published = await publishListingByIdAndSite(listingId, siteId);
+  if (!published) throw new AppError("No se pudo publicar", 409);
+}
+export async function getPublicListingByIdForSite(siteId: number, listingId: number) {
+  const listing = await getListingByIdAndSite(listingId, siteId);
+  if (!listing) return null;
+  if (listing.status !== "published") return null;
+  return listing;
+}
+
+export async function getMyListingsWithImagesCount(
+  userId: number,
+  vertical: string,
+  siteId: number
+) {
+  const listings: any[] = await getMyListings(userId, vertical, siteId);
+
+  const ids = listings
+    .map((l) => Number(l.id))
+    .filter((n) => Number.isFinite(n));
+
+  const counts = await countImagesByListingIdsAndSite(siteId, ids);
+
+  return listings.map((l) => {
+    const id = Number(l.id);
+    const images_count = Number.isFinite(id) ? (counts.get(id) ?? 0) : 0;
+    return { ...l, images_count };
+  });
+}
+
+function normalizeBool(v: string) {
+  const s = v.trim().toLowerCase();
+  if (s === "true" || s === "1") return "true";
+  if (s === "false" || s === "0") return "false";
+  return null;
+}
+
+export async function searchPublicListings(args: {
+  siteId: number;
+  vertical: string;
+
+  q?: string;
+  categoryId?: number;
+  categorySlug?: string;
+
+  minPrice?: number;
+  maxPrice?: number;
+  sort: "newest" | "price_asc" | "price_desc" | "relevance";
+  page: number;
+  pageSize: number;
+
+  dynRaw?: Array<{ name: string; values: string[] }>;
+  useFulltext?: boolean;
+}) {
+  const hasDyn = (args.dynRaw ?? []).length > 0;
+
+  // Resolver categoría (si viene)
+  let categoryId: number | undefined;
+
+  if (args.categoryId) {
+    const cat = await getCategoryByIdAndVertical(args.categoryId, args.vertical);
+    if (!cat) throw new AppError("Categoría no encontrada", 404);
+    categoryId = Number(cat.id);
+  } else if (args.categorySlug) {
+    const cat = await getCategoryBySlugAndVertical(args.categorySlug, args.vertical);
+    if (!cat) throw new AppError("Categoría no encontrada", 404);
+    categoryId = Number(cat.id);
+  } else if (hasDyn) {
+    // MVP: filtros dinámicos requieren categoría
+    throw new AppError("categoryId (o category) es requerida para filtros dinámicos", 400);
+  }
+
+  // Allowed keys por categoría
+  const allowed = new Map<string, { type: string; options: any | null }>();
+  if (categoryId) {
+    const fields = await listFieldsByCategory(categoryId, args.vertical);
+    for (const f of fields) {
+      allowed.set(f.key, { type: f.type, options: f.options ?? null });
+    }
+  }
+
+  // Normaliza dynRaw -> dyn ops
+  const dyn: any[] = [];
+  for (const raw of args.dynRaw ?? []) {
+    const m = /^a_([a-zA-Z0-9_]+)(?:_(min|max))?$/.exec(raw.name);
+    if (!m) continue;
+
+    const key = m[1]!;
+    const kind = m[2] ?? null;
+
+    const def = allowed.get(key);
+    if (!def) throw new AppError(`Filtro dinámico no permitido: ${key}`, 400);
+
+    if (!kind) {
+      if (def.type === "boolean") {
+        const b = normalizeBool(raw.values[0] ?? "");
+        if (!b) throw new AppError(`Valor boolean inválido para ${key}`, 400);
+        dyn.push({ op: "bool", key, value: b });
+      } else {
+        // eq / IN (cap para evitar queries gigantes)
+        const vals = raw.values.map((v) => v.trim()).filter(Boolean).slice(0, 20);
+        if (!vals.length) continue;
+        dyn.push({ op: "eq", key, values: vals });
+      }
+    } else {
+      if (def.type !== "number") throw new AppError(`Rango solo aplica a number: ${key}`, 400);
+      const n = Number(raw.values[0]);
+      if (!Number.isFinite(n)) throw new AppError(`Valor numérico inválido para ${key}_${kind}`, 400);
+      dyn.push({ op: kind === "min" ? "num_min" : "num_max", key, value: n });
+    }
+  }
+
+  return searchPublishedPublic({
+    siteId: args.siteId,
+    vertical: args.vertical,
+    categoryId,
+    q: args.q,
+    minPrice: args.minPrice,
+    maxPrice: args.maxPrice,
+    sort: args.sort,
+    page: args.page,
+    pageSize: args.pageSize,
+    dyn,
+    useFulltext: args.useFulltext,
+  });
+}

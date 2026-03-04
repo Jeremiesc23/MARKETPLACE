@@ -1,7 +1,17 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  allowedDevOrigins: ["localhost", "lvh.me", "*.lvh.me", "10.96.5.219"],
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "storage.googleapis.com",
+        pathname: "/sistema_sas/**",
+      },
+    ],
+  },
+
 };
 
 export default nextConfig;

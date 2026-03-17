@@ -1,6 +1,6 @@
 //adminSites.repo.ts
 import type { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
-import { db } from "@/src/server/config/db";
+import { getDb } from "@/src/server/config/db";
 
 export type AdminSiteRow = {
   id: number;
@@ -24,7 +24,7 @@ export type AdminSiteRow = {
 };
 
 function getPool(): Pool {
-  return db as unknown as Pool;
+  return getDb() as unknown as Pool;
 }
 
 export async function adminListSites(): Promise<AdminSiteRow[]> {

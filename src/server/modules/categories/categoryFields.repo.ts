@@ -1,5 +1,5 @@
 // src/server/modules/categories/categoryFields.repo.ts
-import { db } from "@/src/server/config/db";
+import { getDb } from "@/src/server/config/db";
 
 function parseMaybeJson(v: any) {
   if (v == null) return null;
@@ -14,6 +14,7 @@ function parseMaybeJson(v: any) {
 }
 
 export async function getCategoryByIdAndVertical(categoryId: number, vertical: string) {
+  const db = getDb();
   const [rows] = await db.query<any[]>(
     `SELECT id, name, slug, vertical_slug
      FROM categories
@@ -25,6 +26,7 @@ export async function getCategoryByIdAndVertical(categoryId: number, vertical: s
 }
 
 export async function listFieldsByCategory(categoryId: number, vertical: string) {
+  const db = getDb();
   const [rows] = await db.query<any[]>(
     `
     SELECT

@@ -1,5 +1,5 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
-import { db } from "@/src/server/config/db";
+import { getDb } from "@/src/server/config/db";
 
 export type AdminCategoryRow = {
   id: number;
@@ -33,6 +33,7 @@ function mapCategoryRow(row: CategoryRowPacket): AdminCategoryRow {
 export async function adminListCategoriesByVertical(
   verticalSlug: string
 ): Promise<AdminCategoryRow[]> {
+  const db = getDb();
   const [rows] = await db.query<CategoryRowPacket[]>(
     `
     SELECT id, name, slug, vertical_slug, is_active, created_at
@@ -49,6 +50,7 @@ export async function adminListCategoriesByVertical(
 export async function adminGetCategoryById(
   categoryId: number
 ): Promise<AdminCategoryRow | null> {
+  const db = getDb();
   const [rows] = await db.query<CategoryRowPacket[]>(
     `
     SELECT id, name, slug, vertical_slug, is_active, created_at
@@ -69,6 +71,7 @@ export async function adminCreateCategory(input: {
   slug: string;
   isActive: boolean;
 }): Promise<{ id: number }> {
+  const db = getDb();
   const [res] = await db.execute<ResultSetHeader>(
     `
     INSERT INTO categories (name, slug, is_active, vertical_slug)
@@ -116,6 +119,7 @@ export async function adminUpdateCategory(
 
   values.push(categoryId);
 
+  const db = getDb();
   await db.execute(
     `UPDATE categories SET ${sets.join(", ")} WHERE id = ?`,
     values

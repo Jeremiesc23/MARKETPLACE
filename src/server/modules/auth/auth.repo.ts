@@ -1,7 +1,7 @@
 //src/server/modules/auth/auth.repo.ts
 
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
-import { db } from "@/src/server/config/db";
+import { getDb } from "@/src/server/config/db";
 
 export type DbUser = {
   id: number;
@@ -29,6 +29,7 @@ type UserRow = DbUser & RowDataPacket;
 type UserPublicRow = DbUserPublic & RowDataPacket;
 
 export async function findUserByEmail(email: string) {
+  const db = getDb();
   const [rows] = await db.query<UserRow[]>(
     `
     SELECT
@@ -51,6 +52,7 @@ export async function findUserByEmail(email: string) {
 }
 
 export async function findUserById(id: number) {
+  const db = getDb();
   const [rows] = await db.query<UserPublicRow[]>(
     `
     SELECT
@@ -80,6 +82,7 @@ export async function findUserById(id: number) {
 }
 
 export async function findUserAuthById(id: number) {
+  const db = getDb();
   const [rows] = await db.query<UserRow[]>(
     `
     SELECT
@@ -102,6 +105,7 @@ export async function findUserAuthById(id: number) {
 }
 
 export async function updateUserPassword(userId: number, passwordHash: string) {
+  const db = getDb();
   const [res] = await db.execute<ResultSetHeader>(
     `
     UPDATE users

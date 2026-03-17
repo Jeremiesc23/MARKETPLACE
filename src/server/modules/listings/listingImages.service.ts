@@ -1,7 +1,7 @@
 // src/server/modules/listings/listingImages.service.ts
 import { randomUUID } from "node:crypto";
 import { AppError } from "@/src/server/shared/errors";
-import { db } from "@/src/server/config/db";
+import { getDb } from "@/src/server/config/db";
 import { getListingByIdAndSite } from "./listings.repo";
 
 import {
@@ -109,7 +109,7 @@ export async function createListingImageRecord(args: {
   const exists = await objectExists(args.objectKey);
   if (!exists) throw new AppError("El archivo no existe en el bucket", 409);
 
-  const conn = await db.getConnection();
+  const conn = await getDb().getConnection();
   try {
     await conn.beginTransaction();
 
@@ -170,7 +170,7 @@ export async function deleteListingImage(args: {
   const listing = await getListingByIdAndSite(args.listingId, args.siteId);
   if (!listing) throw new AppError("Listing no encontrado", 404);
 
-  const conn = await db.getConnection();
+  const conn = await getDb().getConnection();
   let objectKeyToDelete: string | null = null;
 
   try {
@@ -237,7 +237,7 @@ export async function setListingImageCover(args: {
   const listing = await getListingByIdAndSite(args.listingId, args.siteId);
   if (!listing) throw new AppError("Listing no encontrado", 404);
 
-  const conn = await db.getConnection();
+  const conn = await getDb().getConnection();
   try {
     await conn.beginTransaction();
 
@@ -278,7 +278,7 @@ export async function reorderListingImages(args: {
 
   if (ordered.length === 0) throw new AppError("Orden inválido", 400);
 
-  const conn = await db.getConnection();
+  const conn = await getDb().getConnection();
   try {
     await conn.beginTransaction();
 

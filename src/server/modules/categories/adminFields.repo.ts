@@ -1,5 +1,5 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
-import { db } from "@/src/server/config/db";
+import { getDb } from "@/src/server/config/db";
 
 export type AdminFieldRow = {
   id: number;
@@ -48,6 +48,7 @@ function mapField(r: FieldPacket): AdminFieldRow {
 }
 
 export async function adminListFieldsByVertical(verticalSlug: string) {
+  const db = getDb();
   const [rows] = await db.query<FieldPacket[]>(
     `
     SELECT id, vertical_slug, \`key\` AS \`key\`, label, type, options, constraints, is_active, created_at
@@ -61,6 +62,7 @@ export async function adminListFieldsByVertical(verticalSlug: string) {
 }
 
 export async function adminGetFieldById(fieldId: number) {
+  const db = getDb();
   const [rows] = await db.query<FieldPacket[]>(
     `
     SELECT id, vertical_slug, \`key\` AS \`key\`, label, type, options, constraints, is_active, created_at
@@ -82,6 +84,7 @@ export async function adminCreateField(input: {
   constraints: any | null;
   isActive: boolean;
 }) {
+  const db = getDb();
   const [res] = await db.execute<ResultSetHeader>(
     `
     INSERT INTO fields (vertical_slug, \`key\`, label, type, options, constraints, is_active)
@@ -120,5 +123,6 @@ export async function adminUpdateField(fieldId: number, patch: {
   if (sets.length === 0) return;
 
   vals.push(fieldId);
+  const db = getDb();
   await db.execute(`UPDATE fields SET ${sets.join(", ")} WHERE id=?`, vals);
 }

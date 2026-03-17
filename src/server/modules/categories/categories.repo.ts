@@ -1,7 +1,8 @@
 // app/modules/categories/categories.repo.ts
-import { db } from "@/src/server/config/db";
+import { getDb } from "@/src/server/config/db";
 
 export async function listCategoriesByVertical(vertical: string) {
+  const db = getDb();
   const [rows] = await db.query<any[]>(
     "SELECT id, name, slug, vertical_slug FROM categories WHERE vertical_slug=? ORDER BY name",
     [vertical]
@@ -11,6 +12,7 @@ export async function listCategoriesByVertical(vertical: string) {
 
 // ✅ nuevo: valida que el categoryId pertenezca al vertical (multi-tenant safe)
 export async function getCategoryByIdAndVertical(categoryId: number, vertical: string) {
+  const db = getDb();
   const [rows] = await db.query<any[]>(
     `SELECT id, name, slug, vertical_slug
      FROM categories
@@ -24,6 +26,7 @@ export async function getCategoryByIdAndVertical(categoryId: number, vertical: s
 
 
 export async function getCategoryBySlugAndVertical(slug: string, vertical: string) {
+  const db = getDb();
   const [rows] = await db.query<any[]>(
     `SELECT id, name, slug, vertical_slug
      FROM categories

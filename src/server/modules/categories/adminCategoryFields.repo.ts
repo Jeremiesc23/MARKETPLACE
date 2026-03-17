@@ -1,5 +1,5 @@
 import type { RowDataPacket, ResultSetHeader } from "mysql2/promise";
-import { db } from "@/src/server/config/db";
+import { getDb } from "@/src/server/config/db";
 
 function parseMaybeJson(v: any) {
   if (v == null) return null;
@@ -10,6 +10,7 @@ function parseMaybeJson(v: any) {
 }
 
 export async function adminGetCategory(categoryId: number) {
+  const db = getDb();
   const [rows] = await db.query<any[]>(
     `SELECT id, name, slug, vertical_slug, is_active
      FROM categories
@@ -21,6 +22,7 @@ export async function adminGetCategory(categoryId: number) {
 }
 
 export async function adminListAssignedFields(categoryId: number, vertical: string) {
+  const db = getDb();
   const [rows] = await db.query<any[]>(
     `
     SELECT
@@ -60,6 +62,7 @@ export async function adminApplyFieldToAllCategoriesInVertical(input: {
   verticalSlug: string;
   isRequired: boolean;
 }) {
+  const db = getDb();
   await db.execute<ResultSetHeader>(
     `
     INSERT INTO category_fields (category_id, field_id, sort_order, is_required)
@@ -84,6 +87,7 @@ export async function adminApplyFieldToAllCategoriesInVertical(input: {
 }
 
 export async function adminUpdateRequired(categoryId: number, fieldId: number, isRequired: boolean) {
+  const db = getDb();
   await db.execute(
     `UPDATE category_fields SET is_required=? WHERE category_id=? AND field_id=?`,
     [isRequired ? 1 : 0, categoryId, fieldId]
@@ -91,6 +95,7 @@ export async function adminUpdateRequired(categoryId: number, fieldId: number, i
 }
 
 export async function adminReorder(categoryId: number, orderedFieldIds: number[]) {
+  const db = getDb();
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -113,6 +118,7 @@ export async function adminReorder(categoryId: number, orderedFieldIds: number[]
 }
 
 export async function adminRemoveFieldFromCategory(categoryId: number, fieldId: number) {
+  const db = getDb();
   await db.execute(
     `DELETE FROM category_fields WHERE category_id=? AND field_id=?`,
     [categoryId, fieldId]
@@ -125,6 +131,7 @@ export async function adminAssignFieldToCategory(input: {
   fieldId: number;
   isRequired: boolean;
 }) {
+  const db = getDb();
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();

@@ -1,9 +1,9 @@
 // src/server/modules/listings/listingImages.repo.ts
-import { db } from "@/src/server/config/db";
+import { getDb } from "@/src/server/config/db";
 import type { Pool, PoolConnection } from "mysql2/promise";
 
 type Queryable = Pick<Pool, "query"> | Pick<PoolConnection, "query">;
-const q = (conn?: Queryable) => conn ?? db;
+const q = (conn?: Queryable) => conn ?? getDb();
 
 export async function listImagesByListingAndSite(
   listingId: number,

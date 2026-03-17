@@ -1,5 +1,5 @@
 // src/server/modules/listings/listings.repo.ts
-import { db } from "@/src/server/config/db";
+import { getDb } from "@/src/server/config/db";
 import type { RowDataPacket, ResultSetHeader } from "mysql2/promise";
 
 export type ListingStatus = "draft" | "published" | "archived" | "deleted";
@@ -82,6 +82,7 @@ function jsonPath(key: string) {
 // ===== Basic checks / CRUD =====
 
 export async function categoryExistsInVertical(categoryId: number, vertical: string) {
+  const db = getDb();
   const [rows] = await db.query<CategoryIdRow[]>(
     "SELECT id FROM categories WHERE id=? AND vertical_slug=? LIMIT 1",
     [categoryId, vertical]
@@ -99,6 +100,7 @@ export async function insertDraftListing(input: {
   currency: string;
   locationText?: string;
 }) {
+  const db = getDb();
   const [result] = await db.query<ResultSetHeader>(
     `INSERT INTO listings (site_id, user_id, category_id, title, description, price, currency, location_text, status)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
@@ -118,6 +120,7 @@ export async function insertDraftListing(input: {
 }
 
 export async function getListingOwnerAndStatus(id: number): Promise<ListingOwnerAndStatusRow | null> {
+  const db = getDb();
   const [rows] = await db.query<ListingOwnerAndStatusRow[]>(
     "SELECT id, site_id, user_id, status FROM listings WHERE id=? LIMIT 1",
     [id]
@@ -126,6 +129,7 @@ export async function getListingOwnerAndStatus(id: number): Promise<ListingOwner
 }
 
 export async function getListingByIdAndSite(listingId: number, siteId: number): Promise<ListingRow | null> {
+  const db = getDb();
   const [rows] = await db.query<ListingRow[]>(
     `SELECT
         l.id, l.user_id, l.site_id, l.category_id, l.title, l.description,
@@ -141,6 +145,7 @@ export async function getListingByIdAndSite(listingId: number, siteId: number): 
 }
 
 export async function getListingByIdAndVertical(id: number, vertical: string) {
+  const db = getDb();
   const [rows] = await db.query<(RowDataPacket & any)[]>(
     `SELECT
         l.id,
@@ -176,6 +181,7 @@ export async function updateListingByIdAndSite(
     attributes: Record<string, any> | null;
   }>
 ) {
+  const db = getDb();
   const fields: string[] = [];
   const values: any[] = [];
 
@@ -223,6 +229,7 @@ export async function updateListingByIdAndSite(
 }
 
 export async function setListingStatus(id: number, status: ListingStatus) {
+  const db = getDb();
   await db.query<ResultSetHeader>("UPDATE listings SET status=? WHERE id=?", [status, id]);
 }
 
@@ -234,6 +241,7 @@ export async function listByUserAndVertical(
   siteId: number,
   opts?: { includeDeleted?: boolean }
 ): Promise<ListingListRow[]> {
+  const db = getDb();
   const where: string[] = ["l.user_id=?", "l.site_id=?", "c.vertical_slug=?"];
   const params: any[] = [userId, siteId, vertical];
 
@@ -256,6 +264,7 @@ export async function listByUserAndVertical(
 // ===== Public listing cards =====
 
 export async function listPublishedBySite(siteId: number): Promise<PublicListingCardRow[]> {
+  const db = getDb();
   const [rows] = await db.query<PublicListingCardRow[]>(
     `
     SELECT
@@ -280,6 +289,7 @@ export async function listPublishedBySite(siteId: number): Promise<PublicListing
 }
 
 export async function listPublishedByVertical(vertical: string): Promise<PublicListingCardRow[]> {
+  const db = getDb();
   const [rows] = await db.query<PublicListingCardRow[]>(
     `
     SELECT
@@ -309,6 +319,7 @@ export async function getPublishedByIdAndVertical(
   id: number,
   vertical: string
 ): Promise<PublicListingRow | null> {
+  const db = getDb();
   const [rows] = await db.query<PublicListingRow[]>(
     `SELECT
         l.id,
@@ -336,6 +347,7 @@ export async function getPublishedByIdAndVertical(
 // ===== Publish =====
 
 export async function publishListingByIdAndSite(listingId: number, siteId: number) {
+  const db = getDb();
   const [res] = await db.query<ResultSetHeader>(
     `UPDATE listings
        SET status = 'published', updated_at = NOW()
@@ -354,6 +366,7 @@ export async function countImagesByListingIdsAndSite(
   siteId: number,
   listingIds: number[]
 ): Promise<Map<number, number>> {
+  const db = getDb();
   const ids = listingIds.filter((n) => Number.isFinite(n));
   if (ids.length === 0) return new Map();
 
@@ -376,6 +389,7 @@ export async function countImagesByListingIdsAndSite(
 // ===== NEW: archive / restore / soft delete =====
 
 export async function archiveListingByIdAndSite(listingId: number, siteId: number) {
+  const db = getDb();
   const [res] = await db.query<ResultSetHeader>(
     `UPDATE listings
         SET status='archived', updated_at=NOW()
@@ -386,6 +400,7 @@ export async function archiveListingByIdAndSite(listingId: number, siteId: numbe
 }
 
 export async function restoreListingToDraftByIdAndSite(listingId: number, siteId: number) {
+  const db = getDb();
   const [res] = await db.query<ResultSetHeader>(
     `UPDATE listings
         SET status='draft', updated_at=NOW()
@@ -401,6 +416,7 @@ export async function softDeleteListingByIdAndSite(args: {
   deletedBy: number | null;
   reason?: string | null;
 }) {
+  const db = getDb();
   const [res] = await db.query<ResultSetHeader>(
     `UPDATE listings
         SET status='deleted',
@@ -456,6 +472,7 @@ export async function searchPublishedPublic(args: {
 
   useFulltext?: boolean;
 }) {
+  const db = getDb();
   const where: string[] = ["l.site_id = ?", "l.status = 'published'", "c.vertical_slug = ?"];
   const whereParams: any[] = [args.siteId, args.vertical];
 

@@ -1,7 +1,8 @@
 //src/server/modules/sites/sites.repo.ts
-import { db } from "@/src/server/config/db";
+import { getDb } from "@/src/server/config/db";
 
 export async function getSiteBySubdomain(subdomain: string) {
+  const db = getDb();
   const [rows] = await db.query<any[]>(
     `SELECT
       id,

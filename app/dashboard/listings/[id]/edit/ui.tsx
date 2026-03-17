@@ -1,3 +1,4 @@
+// app/dashboard/listings/[id]/edit/ui.tsx
 "use client";
 
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
@@ -11,6 +12,15 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { PageHeader } from "@/components/page-header";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 type Category = {
   id: number;
@@ -26,7 +36,7 @@ type ListingFormState = {
   currency: string;
   locationText: string;
   attributes: Record<string, unknown>;
-  status: string;
+  status: string; // "draft" | "published" | "archived" | "deleted"
 };
 
 type ListingImage = {
@@ -152,6 +162,13 @@ function Segmented({
   );
 }
 
+function statusLabel(status: string) {
+  if (status === "published") return "Publicado";
+  if (status === "archived") return "Suspendido";
+  if (status === "deleted") return "Eliminado";
+  return "Borrador";
+}
+
 export default function EditListingFormPage({ id }: { id: string }) {
   const router = useRouter();
 
@@ -181,6 +198,14 @@ export default function EditListingFormPage({ id }: { id: string }) {
   const [submitting, setSubmitting] = useState(false);
   const [publishing, setPublishing] = useState(false);
 
+  // ✅ NEW: archive/restore/delete states
+  const [archiving, setArchiving] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteReason, setDeleteReason] = useState("");
+
   const [pageError, setPageError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [publishError, setPublishError] = useState<string | null>(null);
@@ -189,7 +214,13 @@ export default function EditListingFormPage({ id }: { id: string }) {
   // límites UI
   const maxImages = 12;
   const reachedLimit = images.length >= maxImages;
-  const canPublish = form.status !== "published" && images.length > 0;
+
+  const isDeleted = form.status === "deleted";
+  const canArchive = form.status === "published";
+  const canRestore = form.status === "archived";
+
+  // ✅ publicar sólo si es draft y tiene imágenes
+  const canPublish = form.status === "draft" && images.length > 0;
 
   const selectedCategory = useMemo(
     () => categories.find((c) => String(c.id) === String(form.categoryId)) ?? null,
@@ -315,6 +346,7 @@ export default function EditListingFormPage({ id }: { id: string }) {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
@@ -323,7 +355,7 @@ export default function EditListingFormPage({ id }: { id: string }) {
   }, [id]);
 
   async function handleCategoryChange(nextCategoryId: string) {
-    if (submitting || publishing || imageUploading) return;
+    if (submitting || publishing || imageUploading || archiving || restoring || deleting || isDeleted) return;
 
     const hasAttrs = Object.keys(form.attributes || {}).length > 0;
     if (hasAttrs && nextCategoryId !== form.categoryId) {
@@ -360,6 +392,7 @@ export default function EditListingFormPage({ id }: { id: string }) {
   }
 
   async function saveDraftRequest() {
+    if (isDeleted) throw new Error("Este listing está eliminado.");
     if (!form.categoryId) throw new Error("Selecciona una categoría");
 
     const res = await fetch(`/api/listings/${id}`, {
@@ -399,6 +432,14 @@ export default function EditListingFormPage({ id }: { id: string }) {
     setImagesError(null);
     setSuccessMessage(null);
 
+    if (isDeleted) {
+      setPublishError("Este listing está eliminado.");
+      return;
+    }
+    if (form.status === "archived") {
+      setPublishError("Está suspendido. Reactívalo primero.");
+      return;
+    }
     if (form.status === "published") {
       setSuccessMessage("Este listing ya está publicado.");
       return;
@@ -431,9 +472,101 @@ export default function EditListingFormPage({ id }: { id: string }) {
     }
   }
 
+  // ✅ NEW: archive / restore / delete handlers
+  async function handleArchive() {
+    setSubmitError(null);
+    setPublishError(null);
+    setImagesError(null);
+    setSuccessMessage(null);
+
+    if (!canArchive) return;
+
+    setArchiving(true);
+    try {
+      const res = await fetch(`/api/listings/${id}/archive`, {
+        method: "POST",
+        credentials: "same-origin",
+      });
+      if (!res.ok) throw new Error(await getErrorMessage(res));
+
+      setForm((p) => ({ ...p, status: "archived" }));
+      setSuccessMessage("Publicación suspendida");
+      router.refresh();
+    } catch (err: any) {
+      setSubmitError(err?.message ?? "No se pudo suspender el listing");
+    } finally {
+      setArchiving(false);
+    }
+  }
+
+  async function handleRestore() {
+    setSubmitError(null);
+    setPublishError(null);
+    setImagesError(null);
+    setSuccessMessage(null);
+
+    if (!canRestore) return;
+
+    setRestoring(true);
+    try {
+      const res = await fetch(`/api/listings/${id}/restore`, {
+        method: "POST",
+        credentials: "same-origin",
+      });
+      if (!res.ok) throw new Error(await getErrorMessage(res));
+
+      setForm((p) => ({ ...p, status: "draft" }));
+      setSuccessMessage("Publicación reactivada (borrador)");
+      router.refresh();
+    } catch (err: any) {
+      setSubmitError(err?.message ?? "No se pudo reactivar el listing");
+    } finally {
+      setRestoring(false);
+    }
+  }
+
+  async function handleDeleteConfirm() {
+    setSubmitError(null);
+    setPublishError(null);
+    setImagesError(null);
+    setSuccessMessage(null);
+
+    if (isDeleted) return;
+
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/listings/${id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          reason: deleteReason.trim() || undefined,
+        }),
+      });
+
+      if (!res.ok) throw new Error(await getErrorMessage(res));
+
+      setDeleteOpen(false);
+      setDeleteReason("");
+      setForm((p) => ({ ...p, status: "deleted" }));
+      setSuccessMessage("Publicación eliminada");
+      router.refresh();
+    } catch (err: any) {
+      setSubmitError(err?.message ?? "No se pudo eliminar el listing");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function handleImageFileChange(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (isDeleted) {
+      setImagesError("Este listing está eliminado.");
+      e.target.value = "";
+      return;
+    }
 
     if (reachedLimit) {
       setImagesError(`Alcanzaste el máximo de ${maxImages} imágenes.`);
@@ -500,7 +633,8 @@ export default function EditListingFormPage({ id }: { id: string }) {
     }
   }
 
-  const disabledAll = submitting || publishing || imageUploading;
+  const disabledAll =
+    submitting || publishing || imageUploading || archiving || restoring || deleting || isDeleted;
 
   const segmentItems = useMemo(
     () => [
@@ -521,12 +655,12 @@ export default function EditListingFormPage({ id }: { id: string }) {
   }
 
   return (
-    <div className="pb-24 md:pb-6">
+    <div className="pb-32 md:pb-6">
       <PageHeader
         title={`Editar #${id}`}
         description={selectedCategory?.name ? `Categoría: ${selectedCategory.name}` : "Edita la información y sube fotos."}
         actions={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={() => router.push("/dashboard/listings")} disabled={disabledAll}>
               Volver
             </Button>
@@ -542,15 +676,67 @@ export default function EditListingFormPage({ id }: { id: string }) {
                 ? "Publicado"
                 : canPublish
                 ? "Publicar"
+                : images.length > 0
+                ? "Publicar"
                 : "Sube 1 imagen"}
             </Button>
+
+            {canArchive ? (
+              <Button variant="secondary" onClick={handleArchive} disabled={disabledAll}>
+                {archiving ? "Suspendiendo..." : "Suspender"}
+              </Button>
+            ) : null}
+
+            {canRestore ? (
+              <Button variant="secondary" onClick={handleRestore} disabled={disabledAll}>
+                {restoring ? "Reactivando..." : "Reactivar"}
+              </Button>
+            ) : null}
+
+            <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+              <Button variant="destructive" onClick={() => setDeleteOpen(true)} disabled={disabledAll}>
+                {deleting ? "Eliminando..." : "Eliminar"}
+              </Button>
+
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>¿Eliminar publicación?</DialogTitle>
+                  <DialogDescription>
+                    Se marcará como <b>eliminada</b>. No se borrará físicamente y conservará historial e imágenes.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="grid gap-2">
+                  <div className="text-sm text-muted-foreground">Motivo (opcional)</div>
+                  <Input
+                    value={deleteReason}
+                    onChange={(e) => setDeleteReason(e.target.value)}
+                    maxLength={255}
+                    placeholder="Ej: duplicada, error de contenido…"
+                    disabled={deleting}
+                  />
+                </div>
+
+                <DialogFooter className="gap-2 sm:gap-0">
+                  <Button variant="ghost" onClick={() => setDeleteOpen(false)} disabled={deleting}>
+                    Cancelar
+                  </Button>
+                  <Button variant="destructive" onClick={handleDeleteConfirm} disabled={deleting}>
+                    {deleting ? "Eliminando..." : "Confirmar eliminación"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </div>
         }
       />
 
       <div className="mb-4 flex items-center gap-2">
-        <Badge variant={form.status === "published" ? "default" : "secondary"}>
-          {form.status === "published" ? "Publicado" : "Borrador"}
+        <Badge
+          variant={form.status === "published" ? "default" : "secondary"}
+          className={form.status === "deleted" ? "border border-destructive/30 bg-destructive/10 text-destructive" : ""}
+        >
+          {statusLabel(form.status)}
         </Badge>
         <span className="text-xs text-muted-foreground">{images.length} img</span>
       </div>
@@ -586,6 +772,12 @@ export default function EditListingFormPage({ id }: { id: string }) {
             {successMessage}
           </Card>
         ) : null}
+
+        {isDeleted ? (
+          <Card className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-sm">
+            Este listing está <b>eliminado</b>. No puedes editarlo ni publicarlo.
+          </Card>
+        ) : null}
       </div>
 
       <Separator className="my-5" />
@@ -619,9 +811,7 @@ export default function EditListingFormPage({ id }: { id: string }) {
                     </option>
                   ))}
                 </select>
-                <p className="text-xs text-muted-foreground">
-                  Cambiar categoría limpia los campos dinámicos.
-                </p>
+                <p className="text-xs text-muted-foreground">Cambiar categoría limpia los campos dinámicos.</p>
               </div>
 
               <div className="grid gap-2">
@@ -749,20 +939,16 @@ export default function EditListingFormPage({ id }: { id: string }) {
                   className="block w-full text-sm file:mr-3 file:rounded-md file:border file:border-border file:bg-background file:px-3 file:py-2 file:text-sm file:font-medium hover:file:bg-muted"
                 />
 
-                {reachedLimit ? (
-                  <p className="text-xs text-destructive">Alcanzaste el máximo de {maxImages} imágenes.</p>
-                ) : null}
+                {reachedLimit ? <p className="text-xs text-destructive">Alcanzaste el máximo de {maxImages} imágenes.</p> : null}
 
                 {imageUploading ? <p className="text-sm text-muted-foreground">Subiendo imagen…</p> : null}
                 {imagesLoading ? <p className="text-sm text-muted-foreground">Cargando imágenes…</p> : null}
               </div>
 
-              {(!imagesLoading && images.length === 0) ? (
+              {!imagesLoading && images.length === 0 ? (
                 <Card className="rounded-2xl border-dashed p-4">
                   <div className="text-sm font-medium">Aún no hay imágenes</div>
-                  <div className="mt-1 text-sm text-muted-foreground">
-                    Sube al menos 1 imagen para poder publicar.
-                  </div>
+                  <div className="mt-1 text-sm text-muted-foreground">Sube al menos 1 imagen para poder publicar.</div>
                 </Card>
               ) : null}
 
@@ -777,6 +963,7 @@ export default function EditListingFormPage({ id }: { id: string }) {
                     sizeBytes: img.sizeBytes ?? null,
                   }))}
                   onChanged={loadImages}
+                  disabled={form.status === "deleted"}
                 />
               ) : null}
             </div>
@@ -789,10 +976,11 @@ export default function EditListingFormPage({ id }: { id: string }) {
             Volver
           </Button>
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2 justify-end">
             <Button variant="outline" type="submit" disabled={disabledAll}>
               {submitting ? "Guardando..." : "Guardar cambios"}
             </Button>
+
             <Button type="button" onClick={handlePublish} disabled={disabledAll || !canPublish}>
               {publishing
                 ? "Publicando..."
@@ -802,36 +990,103 @@ export default function EditListingFormPage({ id }: { id: string }) {
                 ? "Publicar"
                 : "Sube 1 imagen"}
             </Button>
+
+            {canArchive ? (
+              <Button variant="secondary" type="button" onClick={handleArchive} disabled={disabledAll}>
+                {archiving ? "Suspendiendo..." : "Suspender"}
+              </Button>
+            ) : null}
+
+            {canRestore ? (
+              <Button variant="secondary" type="button" onClick={handleRestore} disabled={disabledAll}>
+                {restoring ? "Reactivando..." : "Reactivar"}
+              </Button>
+            ) : null}
+
+            <Button variant="destructive" type="button" onClick={() => setDeleteOpen(true)} disabled={disabledAll}>
+              {deleting ? "Eliminando..." : "Eliminar"}
+            </Button>
           </div>
         </div>
       </form>
 
+      {/* Delete Dialog (single instance, reused by header + desktop button) */}
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>¿Eliminar publicación?</DialogTitle>
+            <DialogDescription>
+              Se marcará como <b>eliminada</b>. No se borrará físicamente y conservará historial e imágenes.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-2">
+            <div className="text-sm text-muted-foreground">Motivo (opcional)</div>
+            <Input
+              value={deleteReason}
+              onChange={(e) => setDeleteReason(e.target.value)}
+              maxLength={255}
+              placeholder="Ej: duplicada, error de contenido…"
+              disabled={deleting}
+            />
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" onClick={() => setDeleteOpen(false)} disabled={deleting}>
+              Cancelar
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteConfirm} disabled={deleting}>
+              {deleting ? "Eliminando..." : "Confirmar eliminación"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Mobile bottom bar */}
       <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/90 backdrop-blur md:hidden">
-        <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-3">
-          <Button
-            variant="outline"
-            className="w-full"
-            type="button"
-            onClick={() => router.push("/dashboard/listings")}
-            disabled={disabledAll}
-          >
-            Volver
-          </Button>
+        <div className="mx-auto max-w-6xl px-4 py-3">
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="outline" type="button" onClick={() => router.push("/dashboard/listings")} disabled={disabledAll}>
+              Volver
+            </Button>
 
-          <Button className="w-full" type="button" onClick={() => handleSubmit()} disabled={disabledAll}>
-            {submitting ? "Guardando..." : "Guardar"}
-          </Button>
+            <Button type="button" onClick={() => handleSubmit()} disabled={disabledAll}>
+              {submitting ? "Guardando..." : "Guardar"}
+            </Button>
 
-          <Button className="w-full" type="button" onClick={handlePublish} disabled={disabledAll || !canPublish}>
-            {publishing
-              ? "Publicando..."
-              : form.status === "published"
-              ? "Publicado"
-              : canPublish
-              ? "Publicar"
-              : "Fotos"}
-          </Button>
+            <Button
+              className={canArchive || canRestore ? "" : "col-span-2"}
+              type="button"
+              onClick={handlePublish}
+              disabled={disabledAll || !canPublish}
+            >
+              {publishing
+                ? "Publicando..."
+                : form.status === "published"
+                ? "Publicado"
+                : canPublish
+                ? "Publicar"
+                : "Fotos"}
+            </Button>
+
+            {canArchive ? (
+              <Button variant="secondary" type="button" onClick={handleArchive} disabled={disabledAll}>
+                {archiving ? "Suspendiendo..." : "Suspender"}
+              </Button>
+            ) : null}
+
+            {canRestore ? (
+              <Button variant="secondary" type="button" onClick={handleRestore} disabled={disabledAll}>
+                {restoring ? "Reactivando..." : "Reactivar"}
+              </Button>
+            ) : null}
+          </div>
+
+          <div className="mt-2">
+            <Button variant="destructive" className="w-full" type="button" onClick={() => setDeleteOpen(true)} disabled={disabledAll}>
+              {deleting ? "Eliminando..." : "Eliminar"}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

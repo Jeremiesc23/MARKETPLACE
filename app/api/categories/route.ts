@@ -1,3 +1,4 @@
+// app/api/categories/route.ts
 import { NextResponse } from "next/server";
 import { getCategories } from "@/src/server/modules/categories/categories.service";
 import { getSiteFromRequest } from "@/src/server/shared/tenant";

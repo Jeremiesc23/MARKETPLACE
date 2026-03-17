@@ -1,3 +1,4 @@
+//app/dashboard/listings/new/ui.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -9,6 +10,16 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { PageHeader } from "@/components/page-header";
+import { EditorShell } from "../_components/EditorShell";
+import { EditorSection } from "../_components/EditorSection";
+import { EditorStepper } from "../_components/EditorStepper";
+import { EditorMobileActions } from "../_components/EditorMobileActions";
+// ✅ Reglas por vertical (lo que ya creaste)
+import {
+  verticalFormConfig,
+  defaultVerticalRules,
+  type VerticalFormRules,
+} from "@/src/server/shared/verticalFormConfig";
 
 type Category = {
   id: number;
@@ -76,34 +87,57 @@ function isEmptyValue(v: unknown) {
   return false;
 }
 
-function validateStep(step: number, form: ListingFormState, fields: DynamicField[]) {
+// ✅ ahora valida también ubicación según rules
+function validateStep(
+  step: number,
+  form: ListingFormState,
+  fields: DynamicField[],
+  rules: VerticalFormRules
+) {
   if (step === 0) {
     if (!form.categoryId) return "Selecciona una categoría";
     if (!form.title.trim()) return "Escribe un título";
   }
   if (step === 1) {
+    // Ubicación según vertical
+    if (rules.requireLocation && !form.locationText.trim()) {
+      return "Completa: Ubicación";
+    }
+
     // Valida required dinámicos (si existen)
     const required = fields.filter((f) => f.isRequired);
     for (const f of required) {
       const val = form.attributes?.[f.key];
       if (isEmptyValue(val)) return `Completa: ${f.label}`;
     }
+
     // precio: opcional, pero si existe debe ser válido
     if (form.price.trim() !== "") {
       const n = Number(form.price);
       if (!Number.isFinite(n) || n < 0) return "El precio no es válido";
     }
-    if (form.currency.trim().length !== 3) return "La moneda debe tener 3 letras (ej: USD)";
+    if (form.currency.trim().length !== 3)
+      return "La moneda debe tener 3 letras (ej: USD)";
   }
   return null;
 }
 
-function StepPill({ active, done, label }: { active?: boolean; done?: boolean; label: string }) {
+function StepPill({
+  active,
+  done,
+  label,
+}: {
+  active?: boolean;
+  done?: boolean;
+  label: string;
+}) {
   return (
     <div
       className={[
         "flex items-center gap-2 rounded-full border px-3 py-1 text-xs",
-        active ? "border-foreground/20 bg-muted text-foreground" : "border-border text-muted-foreground",
+        active
+          ? "border-foreground/20 bg-muted text-foreground"
+          : "border-border text-muted-foreground",
       ].join(" ")}
     >
       <span
@@ -144,13 +178,21 @@ export default function NewListingFormPage() {
     attributes: {},
   });
 
+  // ✅ vertical del tenant (viene de GET /api/categories)
+  const [vertical, setVertical] = useState<string>("");
+  const rules = useMemo(
+    () => verticalFormConfig[vertical] ?? defaultVerticalRules,
+    [vertical]
+  );
+
   const selectedCategoryId = useMemo(
     () => Number(form.categoryId) || null,
     [form.categoryId]
   );
 
   const selectedCategory = useMemo(
-    () => categories.find((c) => String(c.id) === String(form.categoryId)) ?? null,
+    () =>
+      categories.find((c) => String(c.id) === String(form.categoryId)) ?? null,
     [categories, form.categoryId]
   );
 
@@ -170,6 +212,10 @@ export default function NewListingFormPage() {
         if (!res.ok) throw new Error(await getErrorMessage(res));
 
         const data = await safeJson(res);
+
+        // ✅ guarda vertical para aplicar reglas
+        if (!cancelled) setVertical(String(data?.vertical ?? ""));
+
         const items = extractArray<Category>(data).map((c: any) => ({
           id: Number(c.id),
           name: String(c.name),
@@ -178,7 +224,10 @@ export default function NewListingFormPage() {
 
         if (!cancelled) setCategories(items);
       } catch (err: any) {
-        if (!cancelled) setPageError(err?.message ?? "No se pudieron cargar las categorías");
+        if (!cancelled)
+          setPageError(
+            err?.message ?? "No se pudieron cargar las categorías"
+          );
       } finally {
         if (!cancelled) setLoadingCategories(false);
       }
@@ -239,13 +288,18 @@ export default function NewListingFormPage() {
     setSubmitting(true);
 
     try {
+      // ✅ si no se muestra ubicación, no mandamos nada
+      const locationValue = rules.showLocation
+        ? form.locationText.trim() || null
+        : null;
+
       const payload = {
         categoryId: Number(form.categoryId),
         title: form.title.trim(),
         description: form.description.trim() || null,
         price: form.price.trim() === "" ? null : Number(form.price),
         currency: (form.currency || "USD").trim().toUpperCase(),
-        locationText: form.locationText.trim() || null,
+        locationText: locationValue,
         attributes: form.attributes,
       };
 
@@ -259,10 +313,10 @@ export default function NewListingFormPage() {
       if (!res.ok) throw new Error(await getErrorMessage(res));
 
       const data = await safeJson(res);
-      const newId = data?.id ?? data?.listing?.id ?? data?.data?.id ?? data?.item?.id;
+      const newId =
+        data?.id ?? data?.listing?.id ?? data?.data?.id ?? data?.item?.id;
 
       if (newId) {
-        // El “paso fotos” lo resuelves en /edit con ListingImagesManager
         router.push(`/dashboard/listings/${newId}/edit`);
       } else {
         router.push("/dashboard/listings");
@@ -279,7 +333,7 @@ export default function NewListingFormPage() {
     setPageError(null);
     setSubmitError(null);
 
-    const err = validateStep(step, form, fields);
+    const err = validateStep(step, form, fields, rules);
     if (err) {
       setSubmitError(err);
       return;
@@ -299,257 +353,88 @@ export default function NewListingFormPage() {
   }
 
   return (
-    <div className="pb-24 md:pb-6">
-      <PageHeader
-        title="Nueva publicación"
-        description="Crea un borrador y luego agrega fotos antes de publicar."
-        actions={
-          <Button variant="outline" onClick={onCancel} disabled={submitting}>
-            Cancelar
-          </Button>
-        }
-      />
+    <>
+  <PageHeader
+    title="Nueva publicación"
+    description="Crea una publicación clara, ordenada y fácil de gestionar."
+  />
 
-      {/* stepper */}
-      <div className="mb-5 flex flex-wrap gap-2">
-        <StepPill label="Básico" active={step === 0} done={step > 0} />
-        <StepPill label="Detalles" active={step === 1} done={step > 1} />
-        <StepPill label="Confirmar" active={step === 2} />
-      </div>
+  <EditorStepper
+    currentStep={step}
+    steps={[
+      { label: "Básico" },
+      { label: "Detalles" },
+      { label: "Confirmar" },
+    ]}
+  />
 
-      {pageError ? (
-        <Card className="mb-4 rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-          {pageError}
-        </Card>
-      ) : null}
+  <EditorShell
+    sidebar={
+      <Card className="rounded-3xl border border-zinc-200 bg-white shadow-sm">
+        <div className="p-5 space-y-4">
+          <div>
+            <div className="text-sm font-semibold text-zinc-900">Resumen</div>
+            <p className="mt-1 text-sm text-zinc-500">
+              Revisa la información antes de continuar.
+            </p>
+          </div>
 
-      {submitError ? (
-        <Card className="mb-4 rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-          {submitError}
-        </Card>
-      ) : null}
-
-      {/* Paso 0 */}
-      {step === 0 ? (
-        <Card className="rounded-2xl p-5">
-          <div className="grid gap-4">
-            <div className="grid gap-2">
-              <label className="text-sm font-medium" htmlFor="categoryId">
-                Categoría
-              </label>
-              <select
-                id="categoryId"
-                value={form.categoryId}
-                onChange={(e) => setForm((p) => ({ ...p, categoryId: e.target.value }))}
-                disabled={loadingCategories || submitting}
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-              >
-                <option value="">
-                  {loadingCategories ? "Cargando..." : "Selecciona una categoría"}
-                </option>
-                {categories.map((cat) => (
-                  <option key={cat.id} value={String(cat.id)}>
-                    {cat.name}
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-muted-foreground">
-                Esto define los campos dinámicos que verás después.
-              </p>
+          <div className="space-y-3 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-zinc-500">Categoría</span>
+              <span className="font-medium text-zinc-900">
+                {selectedCategory?.name ?? "Sin elegir"}
+              </span>
             </div>
 
-            <div className="grid gap-2">
-              <label className="text-sm font-medium" htmlFor="title">
-                Título
-              </label>
-              <input
-                id="title"
-                value={form.title}
-                onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))}
-                disabled={submitting}
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                placeholder="Ej: Departamento 2 recámaras / Serum vitamina C"
-                required
-              />
+            <div className="flex items-center justify-between">
+              <span className="text-zinc-500">Título</span>
+              <span className="max-w-[180px] truncate font-medium text-zinc-900">
+                {form.title || "Sin título"}
+              </span>
             </div>
 
-            <div className="grid gap-2">
-              <label className="text-sm font-medium" htmlFor="description">
-                Descripción
-              </label>
-              <textarea
-                id="description"
-                value={form.description}
-                onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
-                disabled={submitting}
-                className="min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                placeholder="Detalles importantes, beneficios, estado, etc."
-              />
+            <div className="flex items-center justify-between">
+              <span className="text-zinc-500">Precio</span>
+              <span className="font-medium text-zinc-900">
+                {form.price ? `${form.price} ${form.currency}` : "No definido"}
+              </span>
             </div>
           </div>
-        </Card>
-      ) : null}
-
-      {/* Paso 1 */}
-      {step === 1 ? (
-        <Card className="rounded-2xl p-5">
-          <div className="grid gap-5">
-            <div className="grid gap-2">
-              <div className="text-sm font-medium">Precio</div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_140px]">
-                <div className="grid gap-2">
-                  <label className="text-xs text-muted-foreground" htmlFor="price">
-                    Monto (opcional)
-                  </label>
-                  <input
-                    id="price"
-                    type="number"
-                    step="0.01"
-                    value={form.price}
-                    onChange={(e) => setForm((p) => ({ ...p, price: e.target.value }))}
-                    disabled={submitting}
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                    placeholder="0.00"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <label className="text-xs text-muted-foreground" htmlFor="currency">
-                    Moneda
-                  </label>
-                  <input
-                    id="currency"
-                    type="text"
-                    maxLength={3}
-                    value={form.currency}
-                    onChange={(e) =>
-                      setForm((p) => ({ ...p, currency: e.target.value.toUpperCase() }))
-                    }
-                    disabled={submitting}
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                    placeholder="USD"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="grid gap-2">
-              <label className="text-sm font-medium" htmlFor="locationText">
-                Ubicación (texto)
-              </label>
-              <input
-                id="locationText"
-                value={form.locationText}
-                onChange={(e) => setForm((p) => ({ ...p, locationText: e.target.value }))}
-                disabled={submitting}
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                placeholder="Ej: Guadalajara, JAL / Polanco, CDMX"
-              />
-            </div>
-
-            <Separator />
-
-            <div className="grid gap-2">
-              <div className="text-sm font-medium">Campos dinámicos</div>
-              {!form.categoryId ? (
-                <p className="text-sm text-muted-foreground">
-                  Selecciona una categoría en el paso anterior.
-                </p>
-              ) : loadingFields ? (
-                <p className="text-sm text-muted-foreground">Cargando campos...</p>
-              ) : (
-                <DynamicFieldsForm
-                  fields={fields}
-                  attributes={form.attributes}
-                  disabled={submitting}
-                  onChange={(next) => setForm((p) => ({ ...p, attributes: next }))}
-                />
-              )}
-            </div>
-          </div>
-        </Card>
-      ) : null}
-
-      {/* Paso 2 */}
-      {step === 2 ? (
-        <Card className="rounded-2xl p-5">
-          <div className="grid gap-3 text-sm">
-            <div className="text-base font-medium">Revisión</div>
-            <div className="text-muted-foreground">
-              Al crear el borrador, te mandaremos al editor para subir fotos y publicar.
-            </div>
-
-            <Separator />
-
-            <div className="grid gap-2">
-              <div className="flex justify-between gap-3">
-                <span className="text-muted-foreground">Categoría</span>
-                <span className="font-medium">{selectedCategory?.name ?? "—"}</span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-muted-foreground">Título</span>
-                <span className="font-medium">{form.title.trim() || "—"}</span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-muted-foreground">Precio</span>
-                <span className="font-medium">
-                  {form.price.trim() ? `${form.price} ${form.currency}` : "—"}
-                </span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-muted-foreground">Ubicación</span>
-                <span className="font-medium">{form.locationText.trim() || "—"}</span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-muted-foreground">Campos dinámicos</span>
-                <span className="font-medium">{fields.length ? `${fields.length} campos` : "—"}</span>
-              </div>
-            </div>
-          </div>
-        </Card>
-      ) : null}
-
-      {/* Desktop actions */}
-      <div className="mt-6 hidden md:flex items-center justify-between">
-        <Button variant="outline" onClick={step === 0 ? onCancel : onBack} disabled={submitting}>
-          {step === 0 ? "Cancelar" : "Atrás"}
-        </Button>
-
-        <div className="flex gap-2">
-          {step < 2 ? (
-            <Button onClick={onNext} disabled={submitting}>
-              Siguiente
-            </Button>
-          ) : (
-            <Button onClick={createDraft} disabled={submitting}>
-              {submitting ? "Guardando..." : "Crear borrador"}
-            </Button>
-          )}
         </div>
-      </div>
+      </Card>
+    }
+  >
+    <EditorSection
+      title="Información básica"
+      description="Define la categoría, el título y la descripción principal."
+    >
+      {/* aquí va tu bloque actual de categoría, título y descripción */}
+    </EditorSection>
 
-      {/* Mobile bottom bar */}
-      <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/90 backdrop-blur md:hidden">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-2 px-4 py-3">
-          <Button
-            variant="outline"
-            className="w-full"
-            onClick={step === 0 ? onCancel : onBack}
-            disabled={submitting}
-          >
-            {step === 0 ? "Cancelar" : "Atrás"}
-          </Button>
+    <EditorSection
+      title="Detalles"
+      description="Completa ubicación, precio y atributos dinámicos."
+    >
+      {/* aquí va tu bloque actual de precio, currency, locationText y DynamicFieldsForm */}
+    </EditorSection>
 
-          {step < 2 ? (
-            <Button className="w-full" onClick={onNext} disabled={submitting}>
-              Siguiente
-            </Button>
-          ) : (
-            <Button className="w-full" onClick={createDraft} disabled={submitting}>
-              {submitting ? "Guardando..." : "Crear borrador"}
-            </Button>
-          )}
-        </div>
-      </div>
-    </div>
+    <EditorSection
+      title="Confirmación"
+      description="Haz una última revisión antes de guardar."
+    >
+      {/* aquí va tu resumen final o mensaje de confirmación */}
+    </EditorSection>
+  </EditorShell>
+
+  <EditorMobileActions>
+    <Button variant="outline" className="flex-1">
+      Atrás
+    </Button>
+    <Button className="flex-1">
+      Continuar
+    </Button>
+  </EditorMobileActions>
+</>
   );
 }

@@ -1,4 +1,4 @@
-//src/server/modules/listings/listings.service.ts
+// src/server/modules/listings/listings.service.ts
 import { AppError } from "@/src/server/shared/errors";
 import { listFieldsByCategory } from "../categories/categoryFields.repo";
 import { getCategoryByIdAndVertical, getCategoryBySlugAndVertical } from "@/src/server/modules/categories/categories.repo";
@@ -8,14 +8,23 @@ import { countImagesByListingAndSite } from "./listingImages.repo";
 import {
   categoryExistsInVertical,
   insertDraftListing,
-  updateListingByIdAndSite
-, countImagesByListingIdsAndSite,
-  
-setListingStatus,
-  listByUserAndVertical, getListingByIdAndVertical, listPublishedByVertical, getListingByIdAndSite,listPublishedBySite,publishListingByIdAndSite,
-} from "./listings.repo";
-import { sanitizeAndValidateAttributes } from "./attributes.validator";
+  updateListingByIdAndSite,
+  countImagesByListingIdsAndSite,
+  setListingStatus,
+  listByUserAndVertical,
+  getListingByIdAndVertical,
+  listPublishedByVertical,
+  getListingByIdAndSite,
+  listPublishedBySite,
+  publishListingByIdAndSite,
 
+  // ✅ NEW
+  archiveListingByIdAndSite,
+  restoreListingToDraftByIdAndSite,
+  softDeleteListingByIdAndSite,
+} from "./listings.repo";
+
+import { sanitizeAndValidateAttributes } from "./attributes.validator";
 
 export async function getPublicListings(siteId: number) {
   return listPublishedBySite(siteId);
@@ -46,9 +55,11 @@ export async function createListingDraft(args: {
     locationText: args.locationText,
   });
 }
+
 export async function getPublicListingsByVertical(vertical: string) {
   return listPublishedByVertical(vertical);
 }
+
 export async function updateListingDraft(args: {
   listingId: number;
   siteId: number;
@@ -61,20 +72,19 @@ export async function updateListingDraft(args: {
     currency: string;
     locationText: string | null;
 
-    // ✅ nuevo
     attributes: Record<string, any>;
   }>;
 }) {
   const current = await getListingByIdAndSite(args.listingId, args.siteId);
   if (!current) throw new AppError("No existe", 404);
 
+  if (current.status === "deleted") throw new AppError("Publicación eliminada", 410);
+
   const nextCategoryId = args.data.categoryId ?? current.category_id;
 
-  // valida vertical si hay category (o si cambió)
   const ok = await categoryExistsInVertical(Number(nextCategoryId), args.vertical);
   if (!ok) throw new AppError("Categoría inválida para este vertical", 400);
 
-  // ✅ si vienen attributes, validarlos contra los fields de esa categoría/vertical
   if (args.data.attributes !== undefined) {
     const allowed = await listFieldsByCategory(Number(nextCategoryId), args.vertical);
 
@@ -88,10 +98,9 @@ export async function updateListingDraft(args: {
         : {};
 
     const incoming = sanitizeAndValidateAttributes(args.data.attributes, allowed, {
-      requireAllRequired: false, // draft: no exigir required
+      requireAllRequired: false,
     });
 
-    // merge si NO cambió categoría; si cambió, resetea
     args.data.attributes = categoryChanged ? incoming : { ...currentAttrs, ...incoming };
   }
 
@@ -99,9 +108,13 @@ export async function updateListingDraft(args: {
   if (affected === 0) throw new AppError("No existe", 404);
 }
 
-
-export async function getMyListings(userId: number, vertical: string, siteId: number) {
-  return listByUserAndVertical(userId, vertical, siteId);
+export async function getMyListings(
+  userId: number,
+  vertical: string,
+  siteId: number,
+  opts?: { includeDeleted?: boolean }
+) {
+  return listByUserAndVertical(userId, vertical, siteId, { includeDeleted: opts?.includeDeleted });
 }
 
 export async function getPublicListingById(vertical: string, listingId: number) {
@@ -110,17 +123,21 @@ export async function getPublicListingById(vertical: string, listingId: number) 
   if (listing.status !== "published") return null;
   return listing;
 }
+
 export async function getListingForSite(listingId: number, siteId: number) {
   return getListingByIdAndSite(listingId, siteId);
 }
+
 export async function publishListing(listingId: number, siteId: number, vertical: string) {
   const listing = await getListingByIdAndSite(listingId, siteId);
   if (!listing) throw new AppError("No existe", 404);
 
+  if (listing.status === "deleted") throw new AppError("Publicación eliminada", 410);
+  if (listing.status === "archived") throw new AppError("Está suspendida. Reactívala primero.", 409);
+
   const ok = await categoryExistsInVertical(Number(listing.category_id), vertical);
   if (!ok) throw new AppError("Categoría inválida para este vertical", 400);
 
-  // ✅ exigir al menos 1 imagen antes de publicar
   const imgCount = await countImagesByListingAndSite(listingId, siteId);
   if (imgCount === 0) {
     throw new AppError("Debes subir al menos 1 imagen antes de publicar", 400);
@@ -133,12 +150,12 @@ export async function publishListing(listingId: number, siteId: number, vertical
       ? (typeof listing.attributes === "string" ? JSON.parse(listing.attributes) : listing.attributes)
       : {};
 
-  // ✅ publish: exigir required
   sanitizeAndValidateAttributes(attrs, allowed, { requireAllRequired: true });
 
   const published = await publishListingByIdAndSite(listingId, siteId);
   if (!published) throw new AppError("No se pudo publicar", 409);
 }
+
 export async function getPublicListingByIdForSite(siteId: number, listingId: number) {
   const listing = await getListingByIdAndSite(listingId, siteId);
   if (!listing) return null;
@@ -149,9 +166,10 @@ export async function getPublicListingByIdForSite(siteId: number, listingId: num
 export async function getMyListingsWithImagesCount(
   userId: number,
   vertical: string,
-  siteId: number
+  siteId: number,
+  opts?: { includeDeleted?: boolean }
 ) {
-  const listings: any[] = await getMyListings(userId, vertical, siteId);
+  const listings: any[] = await getMyListings(userId, vertical, siteId, opts);
 
   const ids = listings
     .map((l) => Number(l.id))
@@ -192,7 +210,6 @@ export async function searchPublicListings(args: {
 }) {
   const hasDyn = (args.dynRaw ?? []).length > 0;
 
-  // Resolver categoría (si viene)
   let categoryId: number | undefined;
 
   if (args.categoryId) {
@@ -204,11 +221,9 @@ export async function searchPublicListings(args: {
     if (!cat) throw new AppError("Categoría no encontrada", 404);
     categoryId = Number(cat.id);
   } else if (hasDyn) {
-    // MVP: filtros dinámicos requieren categoría
     throw new AppError("categoryId (o category) es requerida para filtros dinámicos", 400);
   }
 
-  // Allowed keys por categoría
   const allowed = new Map<string, { type: string; options: any | null }>();
   if (categoryId) {
     const fields = await listFieldsByCategory(categoryId, args.vertical);
@@ -217,7 +232,6 @@ export async function searchPublicListings(args: {
     }
   }
 
-  // Normaliza dynRaw -> dyn ops
   const dyn: any[] = [];
   for (const raw of args.dynRaw ?? []) {
     const m = /^a_([a-zA-Z0-9_]+)(?:_(min|max))?$/.exec(raw.name);
@@ -235,7 +249,6 @@ export async function searchPublicListings(args: {
         if (!b) throw new AppError(`Valor boolean inválido para ${key}`, 400);
         dyn.push({ op: "bool", key, value: b });
       } else {
-        // eq / IN (cap para evitar queries gigantes)
         const vals = raw.values.map((v) => v.trim()).filter(Boolean).slice(0, 20);
         if (!vals.length) continue;
         dyn.push({ op: "eq", key, values: vals });
@@ -261,4 +274,46 @@ export async function searchPublicListings(args: {
     dyn,
     useFulltext: args.useFulltext,
   });
+}
+
+// ===== NEW: archive / restore / soft delete =====
+
+export async function archiveListing(listingId: number, siteId: number) {
+  const listing = await getListingByIdAndSite(listingId, siteId);
+  if (!listing) throw new AppError("No existe", 404);
+  if (listing.status === "deleted") throw new AppError("Publicación eliminada", 410);
+  if (listing.status !== "published") throw new AppError("Solo puedes suspender una publicación publicada", 409);
+
+  const ok = await archiveListingByIdAndSite(listingId, siteId);
+  if (!ok) throw new AppError("No se pudo suspender", 409);
+}
+
+export async function restoreListingToDraft(listingId: number, siteId: number) {
+  const listing = await getListingByIdAndSite(listingId, siteId);
+  if (!listing) throw new AppError("No existe", 404);
+  if (listing.status === "deleted") throw new AppError("Publicación eliminada", 410);
+  if (listing.status !== "archived") throw new AppError("Solo puedes reactivar una publicación suspendida", 409);
+
+  const ok = await restoreListingToDraftByIdAndSite(listingId, siteId);
+  if (!ok) throw new AppError("No se pudo reactivar", 409);
+}
+
+export async function softDeleteListing(args: {
+  listingId: number;
+  siteId: number;
+  deletedBy: number | null;
+  reason?: string;
+}) {
+  const listing = await getListingByIdAndSite(args.listingId, args.siteId);
+  if (!listing) throw new AppError("No existe", 404);
+  if (listing.status === "deleted") throw new AppError("Ya está eliminada", 409);
+
+  const ok = await softDeleteListingByIdAndSite({
+    listingId: args.listingId,
+    siteId: args.siteId,
+    deletedBy: args.deletedBy ?? null,
+    reason: args.reason ?? null,
+  });
+
+  if (!ok) throw new AppError("No se pudo eliminar", 409);
 }

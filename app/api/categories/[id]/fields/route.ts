@@ -16,7 +16,7 @@ export async function GET(req: Request, context: { params: Promise<{ id: string 
 
     const data = await getCategoryFieldsForVertical(categoryId, site.vertical_slug);
 
-    return NextResponse.json({ ok: true, ...data });
+   return NextResponse.json({ ok: true, ...data });
   } catch (err: unknown) {
     const status = err instanceof AppError ? err.status : 400;
     const message = err instanceof Error ? err.message : "Error";

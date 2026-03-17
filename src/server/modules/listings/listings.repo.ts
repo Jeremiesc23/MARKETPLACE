@@ -1,17 +1,262 @@
-
-//api/src/server/modules/listings/listings.repo.ts
+// src/server/modules/listings/listings.repo.ts
 import { db } from "@/src/server/config/db";
-import { countImagesByListingAndSite } from "./listingImages.repo";
+import type { RowDataPacket, ResultSetHeader } from "mysql2/promise";
+
+export type ListingStatus = "draft" | "published" | "archived" | "deleted";
+
+// ===== Row Types =====
+
+type CategoryIdRow = RowDataPacket & { id: number };
+
+export type ListingOwnerAndStatusRow = RowDataPacket & {
+  id: number;
+  site_id: number;
+  user_id: number;
+  status: ListingStatus;
+};
+
+export type ListingRow = RowDataPacket & {
+  id: number;
+  user_id: number;
+  site_id: number;
+  category_id: number;
+  title: string;
+  description: string | null;
+  price: number | null;
+  currency: string;
+  location_text: string | null;
+  status: ListingStatus;
+
+  // JSON column: mysql2 puede devolver string u object según config
+  attributes: unknown | null;
+
+  deleted_at: string | null;
+  deleted_by: number | null;
+  delete_reason: string | null;
+};
+
+export type ListingListRow = RowDataPacket & {
+  id: number;
+  title: string;
+  price: number | null;
+  currency: string;
+  status: ListingStatus;
+  created_at: string;
+  deleted_at: string | null;
+};
+
+export type PublicListingCardRow = RowDataPacket & {
+  id: number;
+  title: string;
+  price: number | null;
+  currency: string;
+  status: "published";
+  created_at: string;
+  cover_url: string | null;
+};
+
+export type PublicListingRow = RowDataPacket & {
+  id: number;
+  category_id: number;
+  title: string;
+  description: string | null;
+  price: number | null;
+  currency: string;
+  location_text: string | null;
+  attributes: unknown | null;
+  status: "published";
+  created_at: string;
+};
+
+// ===== Helpers =====
+
+function escapeLike(s: string) {
+  return s.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
+}
+
+function jsonPath(key: string) {
+  // Mantén comillas para claves con guiones/espacios
+  return `$.\"${key.replaceAll('"', '\\"')}\"`;
+}
+
+// ===== Basic checks / CRUD =====
 
 export async function categoryExistsInVertical(categoryId: number, vertical: string) {
-  const [rows] = await db.query<any[]>(
+  const [rows] = await db.query<CategoryIdRow[]>(
     "SELECT id FROM categories WHERE id=? AND vertical_slug=? LIMIT 1",
     [categoryId, vertical]
   );
   return rows.length > 0;
 }
-export async function listPublishedBySite(siteId: number) {
-  const [rows] = await db.query<any[]>(
+
+export async function insertDraftListing(input: {
+  siteId: number;
+  userId: number;
+  categoryId: number;
+  title: string;
+  description?: string;
+  price?: number;
+  currency: string;
+  locationText?: string;
+}) {
+  const [result] = await db.query<ResultSetHeader>(
+    `INSERT INTO listings (site_id, user_id, category_id, title, description, price, currency, location_text, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
+    [
+      input.siteId,
+      input.userId,
+      input.categoryId,
+      input.title,
+      input.description ?? null,
+      input.price ?? null,
+      input.currency,
+      input.locationText ?? null,
+    ]
+  );
+
+  return result.insertId;
+}
+
+export async function getListingOwnerAndStatus(id: number): Promise<ListingOwnerAndStatusRow | null> {
+  const [rows] = await db.query<ListingOwnerAndStatusRow[]>(
+    "SELECT id, site_id, user_id, status FROM listings WHERE id=? LIMIT 1",
+    [id]
+  );
+  return rows[0] ?? null;
+}
+
+export async function getListingByIdAndSite(listingId: number, siteId: number): Promise<ListingRow | null> {
+  const [rows] = await db.query<ListingRow[]>(
+    `SELECT
+        l.id, l.user_id, l.site_id, l.category_id, l.title, l.description,
+        l.price, l.currency, l.location_text, l.status, l.attributes,
+        l.deleted_at, l.deleted_by, l.delete_reason
+     FROM listings l
+     WHERE l.id=? AND l.site_id=?
+     LIMIT 1`,
+    [listingId, siteId]
+  );
+
+  return rows[0] ?? null;
+}
+
+export async function getListingByIdAndVertical(id: number, vertical: string) {
+  const [rows] = await db.query<(RowDataPacket & any)[]>(
+    `SELECT
+        l.id,
+        l.user_id, l.site_id,
+        l.category_id,
+        l.title,
+        l.description,
+        l.price,
+        l.currency,
+        l.location_text,
+        l.status,
+        l.attributes,
+        l.deleted_at, l.deleted_by, l.delete_reason
+     FROM listings l
+     JOIN categories c ON c.id = l.category_id
+     WHERE l.id=? AND c.vertical_slug=?
+     LIMIT 1`,
+    [id, vertical]
+  );
+  return rows[0] ?? null;
+}
+
+export async function updateListingByIdAndSite(
+  id: number,
+  siteId: number,
+  patch: Partial<{
+    categoryId: number;
+    title: string;
+    description: string;
+    price: number | null;
+    currency: string;
+    locationText: string | null;
+    attributes: Record<string, any> | null;
+  }>
+) {
+  const fields: string[] = [];
+  const values: any[] = [];
+
+  if (patch.categoryId !== undefined) {
+    fields.push("category_id=?");
+    values.push(patch.categoryId);
+  }
+  if (patch.title !== undefined) {
+    fields.push("title=?");
+    values.push(patch.title);
+  }
+  if (patch.description !== undefined) {
+    fields.push("description=?");
+    values.push(patch.description);
+  }
+  if (patch.price !== undefined) {
+    fields.push("price=?");
+    values.push(patch.price);
+  }
+  if (patch.currency !== undefined) {
+    fields.push("currency=?");
+    values.push(patch.currency);
+  }
+  if (patch.locationText !== undefined) {
+    fields.push("location_text=?");
+    values.push(patch.locationText);
+  }
+  if (patch.attributes !== undefined) {
+    fields.push("attributes=?");
+    values.push(patch.attributes === null ? null : JSON.stringify(patch.attributes));
+  }
+
+  if (fields.length === 0) return 0;
+
+  values.push(id, siteId);
+
+  const [res] = await db.query<ResultSetHeader>(
+    `UPDATE listings
+        SET ${fields.join(", ")}, updated_at = NOW()
+      WHERE id=? AND site_id=? AND status <> 'deleted'`,
+    values
+  );
+
+  return res.affectedRows;
+}
+
+export async function setListingStatus(id: number, status: ListingStatus) {
+  await db.query<ResultSetHeader>("UPDATE listings SET status=? WHERE id=?", [status, id]);
+}
+
+// ===== Dashboard listing =====
+
+export async function listByUserAndVertical(
+  userId: number,
+  vertical: string,
+  siteId: number,
+  opts?: { includeDeleted?: boolean }
+): Promise<ListingListRow[]> {
+  const where: string[] = ["l.user_id=?", "l.site_id=?", "c.vertical_slug=?"];
+  const params: any[] = [userId, siteId, vertical];
+
+  if (!opts?.includeDeleted) where.push("l.status <> 'deleted'");
+
+  const [rows] = await db.query<ListingListRow[]>(
+    `SELECT
+        l.id, l.title, l.price, l.currency, l.status, l.created_at,
+        l.deleted_at
+     FROM listings l
+     JOIN categories c ON c.id = l.category_id
+     WHERE ${where.join(" AND ")}
+     ORDER BY l.created_at DESC`,
+    params
+  );
+
+  return rows;
+}
+
+// ===== Public listing cards =====
+
+export async function listPublishedBySite(siteId: number): Promise<PublicListingCardRow[]> {
+  const [rows] = await db.query<PublicListingCardRow[]>(
     `
     SELECT
       l.id,
@@ -33,102 +278,9 @@ export async function listPublishedBySite(siteId: number) {
   );
   return rows;
 }
-export async function insertDraftListing(input: {
-  siteId: number;
-  userId: number;
-  categoryId: number;
-  title: string;
-  description?: string;
-  price?: number;
-  currency: string;
-  locationText?: string;
-}) {
-  const [result] = await db.query<any>(
-    `INSERT INTO listings (site_id, user_id, category_id, title, description, price, currency, location_text, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
-    [
-      input.siteId,
-      input.userId,
-      input.categoryId,
-      input.title,
-      input.description ?? null,
-      input.price ?? null,
-      input.currency,
-      input.locationText ?? null,
-    ]
-  );
-  return result.insertId as number;
-}
 
-export async function getListingOwnerAndStatus(id: number) {
-  const [rows] = await db.query<any[]>(
-    "SELECT id, site_id, user_id, status FROM listings WHERE id=? LIMIT 1",
-    [id]
-  );
-  return rows[0] ?? null;
-}
-
-export async function updateListingByIdAndSite(
-  id: number,
-  siteId: number,
-  patch: Partial<{
-    categoryId: number;
-    title: string;
-    description: string;
-    price: number | null;
-    currency: string;
-    locationText: string | null;
-
-    // ✅ nuevo
-    attributes: Record<string, any> | null;
-  }>
-) {
-  const fields: string[] = [];
-  const values: any[] = [];
-
-  if (patch.categoryId !== undefined) { fields.push("category_id=?"); values.push(patch.categoryId); }
-  if (patch.title !== undefined) { fields.push("title=?"); values.push(patch.title); }
-  if (patch.description !== undefined) { fields.push("description=?"); values.push(patch.description); }
-  if (patch.price !== undefined) { fields.push("price=?"); values.push(patch.price); }
-  if (patch.currency !== undefined) { fields.push("currency=?"); values.push(patch.currency); }
-  if (patch.locationText !== undefined) { fields.push("location_text=?"); values.push(patch.locationText); }
-
-  // ✅ nuevo
-  if (patch.attributes !== undefined) {
-    fields.push("attributes=?");
-    values.push(patch.attributes === null ? null : JSON.stringify(patch.attributes));
-  }
-
-  if (fields.length === 0) return 0;
-
-  values.push(id, siteId);
-
-  const [res]: any = await db.query(
-    `UPDATE listings
-        SET ${fields.join(", ")}, updated_at = NOW()
-      WHERE id=? AND site_id=?`,
-    values
-  );
-
-  return (res?.affectedRows ?? 0) as number;
-}
-export async function setListingStatus(id: number, status: "draft" | "published" | "archived") {
-  await db.query("UPDATE listings SET status=? WHERE id=?", [status, id]);
-}
-
-export async function listByUserAndVertical(userId: number, vertical: string, siteId: number) {
-  const [rows] = await db.query<any[]>(
-    `SELECT l.id, l.title, l.price, l.currency, l.status, l.created_at
-     FROM listings l
-     JOIN categories c ON c.id = l.category_id
-     WHERE l.user_id=? AND l.site_id=? AND c.vertical_slug=?
-     ORDER BY l.created_at DESC`,
-    [userId, siteId, vertical]
-  );
-  return rows;
-}
-export async function listPublishedByVertical(vertical: string) {
-  const [rows] = await db.query<any[]>(
+export async function listPublishedByVertical(vertical: string): Promise<PublicListingCardRow[]> {
+  const [rows] = await db.query<PublicListingCardRow[]>(
     `
     SELECT
       l.id,
@@ -152,53 +304,12 @@ export async function listPublishedByVertical(vertical: string) {
   );
   return rows;
 }
-export async function getListingByIdAndVertical(id: number, vertical: string) {
-  const [rows] = await db.query<any[]>(
-    `SELECT
-        l.id,
-        l.user_id, l.site_id,
-        l.category_id,
-        l.title,
-        l.description,
-        l.price,
-        l.currency,
-        l.location_text,
-        l.status,
-        l.attributes
-     FROM listings l
-     JOIN categories c ON c.id = l.category_id
-     WHERE l.id=? AND c.vertical_slug=?
-     LIMIT 1`,
-    [id, vertical]
-  );
-  return rows[0] ?? null;
-}
-export async function getListingByIdAndSite(listingId: number, siteId: number) {
-  const [rows] = await db.query<any[]>(
-    `SELECT l.id, l.user_id, l.site_id, l.category_id, l.title, l.description,
-            l.price, l.currency, l.location_text, l.status, l.attributes
-     FROM listings l
-     WHERE l.id=? AND l.site_id=?
-     LIMIT 1`,
-    [listingId, siteId]
-  );
 
-  return rows[0] ?? null;
-}
-
-export async function publishListingByIdAndSite(listingId: number, siteId: number) {
-  const [res]: any = await db.query(
-    `UPDATE listings
-       SET status = 'published', updated_at = NOW()
-     WHERE id = ? AND site_id = ? AND status = 'draft'`,
-    [listingId, siteId]
-  );
-
-  return (res?.affectedRows ?? 0) > 0;
-}
-
-export async function getPublishedByIdAndVertical(id: number, vertical: string) {
-  const [rows] = await db.query<any[]>(
+export async function getPublishedByIdAndVertical(
+  id: number,
+  vertical: string
+): Promise<PublicListingRow | null> {
+  const [rows] = await db.query<PublicListingRow[]>(
     `SELECT
         l.id,
         l.category_id,
@@ -222,6 +333,23 @@ export async function getPublishedByIdAndVertical(id: number, vertical: string) 
   return rows[0] ?? null;
 }
 
+// ===== Publish =====
+
+export async function publishListingByIdAndSite(listingId: number, siteId: number) {
+  const [res] = await db.query<ResultSetHeader>(
+    `UPDATE listings
+       SET status = 'published', updated_at = NOW()
+     WHERE id = ? AND site_id = ? AND status = 'draft'`,
+    [listingId, siteId]
+  );
+
+  return res.affectedRows > 0;
+}
+
+// ===== Images count helper for dashboard =====
+
+type ImagesCountRow = RowDataPacket & { listing_id: number; images_count: number };
+
 export async function countImagesByListingIdsAndSite(
   siteId: number,
   listingIds: number[]
@@ -231,7 +359,7 @@ export async function countImagesByListingIdsAndSite(
 
   const placeholders = ids.map(() => "?").join(",");
 
-  const [rows] = await db.query<any[]>(
+  const [rows] = await db.query<ImagesCountRow[]>(
     `
     SELECT listing_id, COUNT(*) AS images_count
     FROM listing_images
@@ -242,25 +370,71 @@ export async function countImagesByListingIdsAndSite(
     [siteId, ...ids]
   );
 
-  return new Map<number, number>(
-    rows.map((r) => [Number(r.listing_id), Number(r.images_count)])
+  return new Map<number, number>(rows.map((r) => [Number(r.listing_id), Number(r.images_count)]));
+}
+
+// ===== NEW: archive / restore / soft delete =====
+
+export async function archiveListingByIdAndSite(listingId: number, siteId: number) {
+  const [res] = await db.query<ResultSetHeader>(
+    `UPDATE listings
+        SET status='archived', updated_at=NOW()
+      WHERE id=? AND site_id=? AND status='published'`,
+    [listingId, siteId]
   );
+  return res.affectedRows > 0;
 }
 
-// === PUBLIC SEARCH (published + tenant-safe) ===
-
-function escapeLike(s: string) {
-  return s
-    .replaceAll("\\", "\\\\")
-    .replaceAll("%", "\\%")
-    .replaceAll("_", "\\_");
+export async function restoreListingToDraftByIdAndSite(listingId: number, siteId: number) {
+  const [res] = await db.query<ResultSetHeader>(
+    `UPDATE listings
+        SET status='draft', updated_at=NOW()
+      WHERE id=? AND site_id=? AND status='archived'`,
+    [listingId, siteId]
+  );
+  return res.affectedRows > 0;
 }
 
-function jsonPath(key: string) {
-  return `$.\"${key.replaceAll('"', '\\"')}\"`;
+export async function softDeleteListingByIdAndSite(args: {
+  listingId: number;
+  siteId: number;
+  deletedBy: number | null;
+  reason?: string | null;
+}) {
+  const [res] = await db.query<ResultSetHeader>(
+    `UPDATE listings
+        SET status='deleted',
+            deleted_at=NOW(),
+            deleted_by=?,
+            delete_reason=?,
+            updated_at=NOW()
+      WHERE id=? AND site_id=? AND status <> 'deleted'`,
+    [args.deletedBy ?? null, args.reason ?? null, args.listingId, args.siteId]
+  );
+  return res.affectedRows > 0;
 }
+
+// ===== Public Search (published only, tenant-safe) =====
 
 type PublicSort = "newest" | "price_asc" | "price_desc" | "relevance";
+
+type PublicSearchItemRow = RowDataPacket & {
+  id: number;
+  title: string;
+  price: number | null;
+  currency: string;
+  location_text: string | null;
+  created_at: string;
+
+  category_id: number;
+  category_slug: string;
+  category_name: string;
+
+  cover_url: string | null;
+  images_count: number;
+};
+
+type CountRow = RowDataPacket & { total: number };
 
 export async function searchPublishedPublic(args: {
   siteId: number;
@@ -282,11 +456,7 @@ export async function searchPublishedPublic(args: {
 
   useFulltext?: boolean;
 }) {
-  const where: string[] = [
-    "l.site_id = ?",
-    "l.status = 'published'",
-    "c.vertical_slug = ?",
-  ];
+  const where: string[] = ["l.site_id = ?", "l.status = 'published'", "c.vertical_slug = ?"];
   const whereParams: any[] = [args.siteId, args.vertical];
 
   if (args.categoryId) {
@@ -303,7 +473,6 @@ export async function searchPublishedPublic(args: {
     whereParams.push(args.maxPrice);
   }
 
-  // q
   const q = args.q?.trim();
   const useFulltext = Boolean(args.useFulltext);
 
@@ -316,8 +485,7 @@ export async function searchPublishedPublic(args: {
       whereParams.push(q);
 
       if (args.sort === "relevance") {
-        orderBy =
-          "MATCH(l.title, l.description) AGAINST(? IN BOOLEAN MODE) DESC, l.created_at DESC";
+        orderBy = "MATCH(l.title, l.description) AGAINST(? IN BOOLEAN MODE) DESC, l.created_at DESC";
         orderParams.push(q);
       }
     } else {
@@ -325,26 +493,21 @@ export async function searchPublishedPublic(args: {
       where.push("(l.title LIKE ? ESCAPE '\\\\' OR l.description LIKE ? ESCAPE '\\\\')");
       whereParams.push(like, like);
 
-      // sin FULLTEXT, relevance cae a newest
       if (args.sort === "relevance") orderBy = "l.created_at DESC";
     }
   }
 
-  // dyn (JSON_EXTRACT)
+  // dyn filters (JSON_EXTRACT)
   for (const f of args.dyn ?? []) {
     if (f.op === "eq") {
       const placeholders = f.values.map(() => "?").join(",");
       where.push(`JSON_UNQUOTE(JSON_EXTRACT(l.attributes, ?)) IN (${placeholders})`);
       whereParams.push(jsonPath(f.key), ...f.values);
     } else if (f.op === "num_min") {
-      where.push(
-        `CAST(JSON_UNQUOTE(JSON_EXTRACT(l.attributes, ?)) AS DECIMAL(20,6)) >= ?`
-      );
+      where.push(`CAST(JSON_UNQUOTE(JSON_EXTRACT(l.attributes, ?)) AS DECIMAL(20,6)) >= ?`);
       whereParams.push(jsonPath(f.key), f.value);
     } else if (f.op === "num_max") {
-      where.push(
-        `CAST(JSON_UNQUOTE(JSON_EXTRACT(l.attributes, ?)) AS DECIMAL(20,6)) <= ?`
-      );
+      where.push(`CAST(JSON_UNQUOTE(JSON_EXTRACT(l.attributes, ?)) AS DECIMAL(20,6)) <= ?`);
       whereParams.push(jsonPath(f.key), f.value);
     } else if (f.op === "bool") {
       where.push(`LOWER(JSON_UNQUOTE(JSON_EXTRACT(l.attributes, ?))) = ?`);
@@ -352,7 +515,6 @@ export async function searchPublishedPublic(args: {
     }
   }
 
-  // sort por precio
   if (args.sort === "price_asc") {
     orderBy = "l.price IS NULL ASC, l.price ASC, l.created_at DESC";
   } else if (args.sort === "price_desc") {
@@ -360,12 +522,11 @@ export async function searchPublishedPublic(args: {
   } else if (args.sort === "newest") {
     orderBy = "l.created_at DESC";
   }
-  // relevance ya quedó arriba si aplica
 
   const offset = (args.page - 1) * args.pageSize;
 
   // COUNT
-  const [countRows] = await db.query<any[]>(
+  const [countRows] = await db.query<CountRow[]>(
     `
     SELECT COUNT(*) AS total
     FROM listings l
@@ -376,10 +537,10 @@ export async function searchPublishedPublic(args: {
   );
   const total = Number(countRows?.[0]?.total ?? 0);
 
-  // SELECT (cover + images_count correlacionado; rápido con índice (site_id, listing_id))
+  // SELECT
   const selectParams = [...whereParams, ...orderParams, args.pageSize, offset];
 
-  const [rows] = await db.query<any[]>(
+  const [rows] = await db.query<PublicSearchItemRow[]>(
     `
     SELECT
       l.id,

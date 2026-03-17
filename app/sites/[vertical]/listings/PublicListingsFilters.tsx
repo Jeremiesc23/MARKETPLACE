@@ -1,7 +1,9 @@
+// app/sites/[vertical]/listings/PublicListingsFilters.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { SlidersHorizontal, Search, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -16,25 +18,58 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 
-type Category = { id: number; name: string; slug: string };
+type Category = {
+  id: number;
+  name: string;
+  slug?: string;
+};
+
 type Field = {
   key: string;
   label: string;
   type: "text" | "number" | "boolean" | "select";
-  options?: any;
-  constraints?: any;
+  options?: unknown;
+  constraints?: Record<string, unknown> | null;
   isRequired?: boolean;
 };
 
 type FiltersVariant = "sidebar" | "button";
 
 function setParam(sp: URLSearchParams, key: string, value: string | null) {
-  if (value == null || value === "") sp.delete(key);
+  if (value == null || value.trim() === "") sp.delete(key);
   else sp.set(key, value);
 }
 
+function parseArray<T = any>(payload: any): T[] {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.categories)) return payload.categories;
+  if (Array.isArray(payload?.fields)) return payload.fields;
+  return [];
+}
+
+function parseFieldOptions(input: unknown): string[] {
+  if (!input) return [];
+  if (Array.isArray(input)) {
+    return input.map((v) => String(v)).filter(Boolean);
+  }
+  if (typeof input === "string") {
+    try {
+      const parsed = JSON.parse(input);
+      if (Array.isArray(parsed)) return parsed.map((v) => String(v)).filter(Boolean);
+    } catch {
+      return input
+        .split(",")
+        .map((v) => v.trim())
+        .filter(Boolean);
+    }
+  }
+  return [];
+}
+
 function niceDynLabel(key: string, value: string, fields: Field[]) {
-  const raw = key.startsWith("a_") ? key.slice(2) : key; // ej: color, precio_min
+  const raw = key.startsWith("a_") ? key.slice(2) : key;
   const base = raw.replace(/_(min|max)$/, "");
   const fieldLabel = fields.find((f) => f.key === base)?.label ?? base;
 
@@ -50,360 +85,450 @@ export default function PublicListingsFilters({
   variant?: FiltersVariant;
 }) {
   const router = useRouter();
-  const search = useSearchParams();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [fields, setFields] = useState<Field[]>([]);
+  const [loadingFields, setLoadingFields] = useState(false);
 
-  // core
-  const [q, setQ] = useState("");
-  const [categoryId, setCategoryId] = useState<string>("");
-  const [minPrice, setMinPrice] = useState("");
-  const [maxPrice, setMaxPrice] = useState("");
-  const [sort, setSort] = useState("newest");
+  const [q, setQ] = useState(searchParams.get("q") ?? "");
+  const [categoryId, setCategoryId] = useState(searchParams.get("categoryId") ?? "");
+  const [minPrice, setMinPrice] = useState(searchParams.get("minPrice") ?? "");
+  const [maxPrice, setMaxPrice] = useState(searchParams.get("maxPrice") ?? "");
+  const [sort, setSort] = useState(searchParams.get("sort") ?? "newest");
+  const [dynValues, setDynValues] = useState<Record<string, string>>({});
 
-  // dyn params (a_key, a_key_min, a_key_max)
-  const [dynParams, setDynParams] = useState<Record<string, string>>({});
-
-  const [open, setOpen] = useState(false);
-
-  // sync URL -> state
   useEffect(() => {
-    setQ(search.get("q") ?? "");
-    setCategoryId(search.get("categoryId") ?? "");
-    setMinPrice(search.get("minPrice") ?? "");
-    setMaxPrice(search.get("maxPrice") ?? "");
-    setSort(search.get("sort") ?? "newest");
+    setQ(searchParams.get("q") ?? "");
+    setCategoryId(searchParams.get("categoryId") ?? "");
+    setMinPrice(searchParams.get("minPrice") ?? "");
+    setMaxPrice(searchParams.get("maxPrice") ?? "");
+    setSort(searchParams.get("sort") ?? "newest");
 
-    const d: Record<string, string> = {};
-    for (const [k, v] of search.entries()) {
-      if (k.startsWith("a_")) d[k] = v;
+    const nextDyn: Record<string, string> = {};
+    for (const [key, value] of searchParams.entries()) {
+      if (key.startsWith("a_")) nextDyn[key] = value;
     }
-    setDynParams(d);
-  }, [search]);
+    setDynValues(nextDyn);
+  }, [searchParams]);
 
-  // cargar categorías
   useEffect(() => {
-    (async () => {
+    let cancelled = false;
+
+    async function loadCategories() {
       try {
-        const res = await fetch("/api/categories", { cache: "no-store" });
-        const json = await res.json();
-        if (json?.ok && Array.isArray(json.categories)) setCategories(json.categories);
+        const res = await fetch("/api/categories", {
+          credentials: "same-origin",
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || cancelled) return;
+
+        const items = parseArray<any>(data).map((c) => ({
+          id: Number(c.id),
+          name: String(c.name ?? ""),
+          slug: c.slug ? String(c.slug) : undefined,
+        }));
+
+        setCategories(items);
       } catch {
-        // ignore
+        if (!cancelled) setCategories([]);
       }
-    })();
+    }
+
+    loadCategories();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // cargar fields de categoría
   useEffect(() => {
-    (async () => {
+    let cancelled = false;
+
+    async function loadFields() {
       if (!categoryId) {
         setFields([]);
         return;
       }
+
+      setLoadingFields(true);
       try {
-        const res = await fetch(`/api/categories/${categoryId}/fields`, { cache: "no-store" });
-        const json = await res.json();
-        if (json?.ok && Array.isArray(json.fields)) setFields(json.fields);
-        else setFields([]);
+        const res = await fetch(`/api/categories/${categoryId}/fields`, {
+          credentials: "same-origin",
+          cache: "no-store",
+        });
+
+        const data = await res.json().catch(() => null);
+        if (!res.ok || cancelled) {
+          if (!cancelled) setFields([]);
+          return;
+        }
+
+        const nextFields = parseArray<any>(data).map((f) => ({
+          key: String(f.key),
+          label: String(f.label ?? f.key),
+          type: (f.type ?? "text") as Field["type"],
+          options: f.options ?? null,
+          constraints: f.constraints ?? null,
+          isRequired: Boolean(f.isRequired ?? f.is_required ?? false),
+        }));
+
+        setFields(nextFields);
       } catch {
-        setFields([]);
+        if (!cancelled) setFields([]);
+      } finally {
+        if (!cancelled) setLoadingFields(false);
       }
-    })();
+    }
+
+    loadFields();
+    return () => {
+      cancelled = true;
+    };
   }, [categoryId]);
 
-  const optionList = (f: Field): Array<{ value: string; label: string }> => {
-    const opts = f.options;
-    if (Array.isArray(opts)) {
-      return opts.map((o: any) =>
-        typeof o === "string"
-          ? { value: o, label: o }
-          : { value: String(o.value), label: String(o.label ?? o.value) }
-      );
-    }
-    return [];
-  };
+  const activeFilters = useMemo(() => {
+    const items: Array<{ key: string; label: string }> = [];
 
-  function apply() {
-    const sp = new URLSearchParams(search.toString());
+    if (q.trim()) items.push({ key: "q", label: `Buscar: ${q.trim()}` });
 
-    setParam(sp, "q", q.trim() || null);
-    setParam(sp, "categoryId", categoryId || null);
-    setParam(sp, "minPrice", minPrice || null);
-    setParam(sp, "maxPrice", maxPrice || null);
-    setParam(sp, "sort", sort || "newest");
-
-    // reset page
-    sp.set("page", "1");
-
-    // limpia dyn previos
-    for (const k of Array.from(sp.keys())) {
-      if (k.startsWith("a_")) sp.delete(k);
+    if (categoryId) {
+      const category = categories.find((c) => String(c.id) === categoryId);
+      if (category) {
+        items.push({ key: "categoryId", label: category.name });
+      }
     }
 
-    // set dyn actuales
-    for (const [k, v] of Object.entries(dynParams)) {
-      if (!k.startsWith("a_")) continue;
-      if (!v) continue;
-      sp.set(k, v);
+    if (minPrice) items.push({ key: "minPrice", label: `Precio ≥ ${minPrice}` });
+    if (maxPrice) items.push({ key: "maxPrice", label: `Precio ≤ ${maxPrice}` });
+    if (sort && sort !== "newest") {
+      const sortMap: Record<string, string> = {
+        newest: "Más recientes",
+        oldest: "Más antiguos",
+        price_asc: "Precio menor",
+        price_desc: "Precio mayor",
+      };
+      items.push({ key: "sort", label: sortMap[sort] ?? sort });
     }
 
-    router.push(`?${sp.toString()}`);
-    setOpen(false);
+    for (const [key, value] of Object.entries(dynValues)) {
+      if (!value) continue;
+      items.push({ key, label: niceDynLabel(key, value, fields) });
+    }
+
+    return items;
+  }, [categories, categoryId, dynValues, fields, maxPrice, minPrice, q, sort]);
+
+  function applyFilters() {
+    const next = new URLSearchParams(searchParams.toString());
+
+    setParam(next, "q", q);
+    setParam(next, "categoryId", categoryId);
+    setParam(next, "minPrice", minPrice);
+    setParam(next, "maxPrice", maxPrice);
+    setParam(next, "sort", sort === "newest" ? null : sort);
+
+    next.delete("page");
+
+    for (const key of Array.from(next.keys())) {
+      if (key.startsWith("a_")) next.delete(key);
+    }
+
+    for (const [key, value] of Object.entries(dynValues)) {
+      if (value?.trim()) next.set(key, value.trim());
+    }
+
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   }
 
   function clearAll() {
-    router.push("?");
-    setOpen(false);
+    router.replace(pathname, { scroll: false });
   }
 
-  function removeKeys(keys: string[]) {
-    const sp = new URLSearchParams(search.toString());
-    keys.forEach((k) => sp.delete(k));
-    sp.set("page", "1");
-    router.push(`?${sp.toString()}`);
+  function removeOneFilter(key: string) {
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete(key);
+    next.delete("page");
+
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   }
 
-  const activeChips = useMemo(() => {
-    const chips: Array<{ id: string; label: string; remove: () => void }> = [];
+  function renderDynamicField(field: Field) {
+    const fieldKey = `a_${field.key}`;
+    const value = dynValues[fieldKey] ?? "";
 
-    const qv = search.get("q");
-    if (qv) chips.push({ id: "q", label: `Buscar: ${qv}`, remove: () => removeKeys(["q"]) });
-
-    const cat = search.get("categoryId");
-    if (cat) {
-      const name = categories.find((c) => String(c.id) === String(cat))?.name ?? `Cat ${cat}`;
-      chips.push({ id: "categoryId", label: `Categoría: ${name}`, remove: () => removeKeys(["categoryId"]) });
+    if (field.type === "boolean") {
+      return (
+        <label
+          key={field.key}
+          className="flex items-center gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3"
+        >
+          <input
+            type="checkbox"
+            checked={value === "true"}
+            onChange={(e) =>
+              setDynValues((prev) => ({
+                ...prev,
+                [fieldKey]: e.target.checked ? "true" : "",
+              }))
+            }
+            className="h-4 w-4 rounded border-zinc-300"
+          />
+          <span className="text-sm font-medium text-zinc-700">{field.label}</span>
+        </label>
+      );
     }
 
-    const min = search.get("minPrice");
-    const max = search.get("maxPrice");
-    if (min || max) chips.push({ id: "price", label: `Precio: ${min || "0"}–${max || "∞"}`, remove: () => removeKeys(["minPrice","maxPrice"]) });
+    if (field.type === "select") {
+      const options = parseFieldOptions(field.options);
 
-    const s = search.get("sort");
-    if (s && s !== "newest") {
-      const label = s === "price_asc" ? "Orden: Precio ↑" : s === "price_desc" ? "Orden: Precio ↓" : "Orden: Relevancia";
-      chips.push({ id: "sort", label, remove: () => removeKeys(["sort"]) });
-    }
-
-    for (const [k, v] of Object.entries(dynParams)) {
-      chips.push({ id: k, label: niceDynLabel(k, v, fields), remove: () => removeKeys([k]) });
-    }
-
-    return chips;
-  }, [search, categories, dynParams, fields]);
-
-  const FiltersBody = (
-    <div className="space-y-4">
-      {activeChips.length ? (
-        <div className="flex flex-wrap gap-2">
-          {activeChips.map((c) => (
-            <Badge
-              key={c.id}
-              variant="secondary"
-              className="rounded-full cursor-pointer"
-              onClick={c.remove}
-              title="Quitar filtro"
-            >
-              {c.label} ✕
-            </Badge>
-          ))}
+      return (
+        <div key={field.key} className="space-y-2">
+          <label className="text-sm font-medium text-zinc-700">{field.label}</label>
+          <select
+            value={value}
+            onChange={(e) =>
+              setDynValues((prev) => ({
+                ...prev,
+                [fieldKey]: e.target.value,
+              }))
+            }
+            className="flex h-12 w-full rounded-2xl border border-white/40 bg-white/60 px-4 text-sm font-medium text-zinc-900 shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] outline-none ring-0 backdrop-blur-md transition-all focus:border-primary/50 focus:bg-white dark:border-white/10 dark:bg-black/20 dark:text-zinc-100 dark:focus:border-primary/50 dark:focus:bg-black/40"
+          >
+            <option value="">Todos</option>
+            {options.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
         </div>
-      ) : null}
+      );
+    }
 
-      <div className="space-y-2">
-        <div className="text-xs font-medium text-muted-foreground">Buscar</div>
+    if (field.type === "number") {
+      return (
+        <div key={field.key} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-zinc-700">{field.label} mín.</label>
+            <Input
+              type="number"
+              inputMode="decimal"
+              value={dynValues[`a_${field.key}_min`] ?? ""}
+              onChange={(e) =>
+                setDynValues((prev) => ({
+                  ...prev,
+                  [`a_${field.key}_min`]: e.target.value,
+                }))
+              }
+              placeholder="Mínimo"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-zinc-700">{field.label} máx.</label>
+            <Input
+              type="number"
+              inputMode="decimal"
+              value={dynValues[`a_${field.key}_max`] ?? ""}
+              onChange={(e) =>
+                setDynValues((prev) => ({
+                  ...prev,
+                  [`a_${field.key}_max`]: e.target.value,
+                }))
+              }
+              placeholder="Máximo"
+            />
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div key={field.key} className="space-y-2">
+        <label className="text-sm font-medium text-zinc-700">{field.label}</label>
         <Input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && apply()}
-          placeholder="Buscar…"
-          className="rounded-xl"
+          value={value}
+          onChange={(e) =>
+            setDynValues((prev) => ({
+              ...prev,
+              [fieldKey]: e.target.value,
+            }))
+          }
+          placeholder={`Buscar por ${field.label.toLowerCase()}`}
         />
+      </div>
+    );
+  }
+
+  const filtersBody = (
+    <div className="space-y-5">
+      <div className="space-y-2">
+        <label className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Buscar</label>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" />
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Título o palabra clave"
+            className="h-12 w-full !rounded-2xl !border-white/40 !bg-white/60 pl-11 text-sm font-medium shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] backdrop-blur-md transition-all focus:!bg-white dark:!border-white/10 dark:!bg-black/20 dark:focus:!bg-black/40"
+          />
+        </div>
       </div>
 
       <div className="space-y-2">
-        <div className="text-xs font-medium text-muted-foreground">Categoría</div>
+        <label className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Categoría</label>
         <select
           value={categoryId}
           onChange={(e) => setCategoryId(e.target.value)}
-          className="h-10 w-full rounded-xl border bg-background px-3 text-sm"
+          className="flex h-12 w-full rounded-2xl border border-white/40 bg-white/60 px-4 text-sm font-medium text-zinc-900 shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] outline-none backdrop-blur-md transition-all focus:border-primary/50 focus:bg-white dark:border-white/10 dark:bg-black/20 dark:text-zinc-100 dark:focus:border-primary/50 dark:focus:bg-black/40"
         >
-          <option value="">(Todas)</option>
-          {categories.map((c) => (
-            <option key={c.id} value={String(c.id)}>
-              {c.name}
+          <option value="">Todas</option>
+          {categories.map((category) => (
+            <option key={category.id} value={String(category.id)}>
+              {category.name}
             </option>
           ))}
         </select>
       </div>
 
-      <div className="space-y-2">
-        <div className="text-xs font-medium text-muted-foreground">Precio</div>
-        <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="space-y-2">
+          <label className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Temp. Min</label>
           <Input
+            type="number"
+            inputMode="decimal"
             value={minPrice}
             onChange={(e) => setMinPrice(e.target.value)}
-            placeholder="Mín"
-            inputMode="numeric"
-            className="rounded-xl"
+            placeholder="0"
+            className="h-12 !rounded-2xl !border-white/40 !bg-white/60 text-sm font-medium shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] backdrop-blur-md transition-all focus:!bg-white dark:!border-white/10 dark:!bg-black/20 dark:focus:!bg-black/40"
           />
+        </div>
+        <div className="space-y-2">
+          <label className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Temp. Max</label>
           <Input
+            type="number"
+            inputMode="decimal"
             value={maxPrice}
             onChange={(e) => setMaxPrice(e.target.value)}
-            placeholder="Máx"
-            inputMode="numeric"
-            className="rounded-xl"
+            placeholder="1000"
+            className="h-12 !rounded-2xl !border-white/40 !bg-white/60 text-sm font-medium shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] backdrop-blur-md transition-all focus:!bg-white dark:!border-white/10 dark:!bg-black/20 dark:focus:!bg-black/40"
           />
         </div>
       </div>
 
       <div className="space-y-2">
-        <div className="text-xs font-medium text-muted-foreground">Ordenar</div>
+        <label className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Ordenar por</label>
         <select
           value={sort}
           onChange={(e) => setSort(e.target.value)}
-          className="h-10 w-full rounded-xl border bg-background px-3 text-sm"
+          className="flex h-12 w-full rounded-2xl border border-white/40 bg-white/60 px-4 text-sm font-medium text-zinc-900 shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] outline-none backdrop-blur-md transition-all focus:border-primary/50 focus:bg-white dark:border-white/10 dark:bg-black/20 dark:text-zinc-100 dark:focus:border-primary/50 dark:focus:bg-black/40"
         >
-          <option value="newest">Más nuevos</option>
-          <option value="price_asc">Precio ↑</option>
-          <option value="price_desc">Precio ↓</option>
-          <option value="relevance">Relevancia</option>
+          <option value="newest">Más recientes</option>
+          <option value="oldest">Más antiguos</option>
+          <option value="price_asc">Precio menor</option>
+          <option value="price_desc">Precio mayor</option>
         </select>
       </div>
 
-      {fields.length > 0 ? (
+      {(loadingFields || fields.length > 0) && (
+        <>
+          <Separator className="opacity-50 dark:opacity-20" />
+          <div className="space-y-4">
+            <div>
+              <h3 className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+                Filtros específicos
+              </h3>
+              <p className="mt-1 flex items-center gap-1.5 text-xs font-medium text-primary">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary/40 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+                </span>
+                Se ajustan por categoría
+              </p>
+            </div>
+
+            {loadingFields ? (
+              <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-500">
+                Cargando campos…
+              </div>
+            ) : (
+              <div className="space-y-4">{fields.map(renderDynamicField)}</div>
+            )}
+          </div>
+        </>
+      )}
+
+      {activeFilters.length > 0 && (
         <>
           <Separator />
           <div className="space-y-3">
-            <div className="text-sm font-semibold tracking-tight">Filtros de categoría</div>
+            <div className="text-sm font-semibold tracking-tight text-zinc-900">
+              Filtros activos
+            </div>
 
-            {fields.map((f) => {
-              const key = f.key;
-
-              if (f.type === "number") {
-                const kMin = `a_${key}_min`;
-                const kMax = `a_${key}_max`;
-                return (
-                  <div key={key} className="space-y-2">
-                    <div className="text-xs font-medium text-muted-foreground">{f.label}</div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Input
-                        value={dynParams[kMin] ?? ""}
-                        onChange={(e) => setDynParams((d) => ({ ...d, [kMin]: e.target.value }))}
-                        placeholder="Min"
-                        className="rounded-xl"
-                      />
-                      <Input
-                        value={dynParams[kMax] ?? ""}
-                        onChange={(e) => setDynParams((d) => ({ ...d, [kMax]: e.target.value }))}
-                        placeholder="Max"
-                        className="rounded-xl"
-                      />
-                    </div>
-                  </div>
-                );
-              }
-
-              if (f.type === "boolean") {
-                const k = `a_${key}`;
-                const checked = (dynParams[k] ?? "") === "true";
-                return (
-                  <label key={key} className="flex items-center gap-3 rounded-xl border bg-background px-3 py-2">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(e) =>
-                        setDynParams((d) => {
-                          const next = { ...d };
-                          if (e.target.checked) next[k] = "true";
-                          else delete next[k];
-                          return next;
-                        })
-                      }
-                      className="h-4 w-4"
-                    />
-                    <span className="text-sm">{f.label}</span>
-                  </label>
-                );
-              }
-
-              if (f.type === "select") {
-                const k = `a_${key}`;
-                const opts = optionList(f);
-                return (
-                  <div key={key} className="space-y-2">
-                    <div className="text-xs font-medium text-muted-foreground">{f.label}</div>
-                    <select
-                      value={dynParams[k] ?? ""}
-                      onChange={(e) => setDynParams((d) => ({ ...d, [k]: e.target.value }))}
-                      className="h-10 w-full rounded-xl border bg-background px-3 text-sm"
-                    >
-                      <option value="">(cualquiera)</option>
-                      {opts.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                );
-              }
-
-              // text
-              const k = `a_${key}`;
-              return (
-                <div key={key} className="space-y-2">
-                  <div className="text-xs font-medium text-muted-foreground">{f.label}</div>
-                  <Input
-                    value={dynParams[k] ?? ""}
-                    onChange={(e) => setDynParams((d) => ({ ...d, [k]: e.target.value }))}
-                    placeholder="Valor…"
-                    className="rounded-xl"
-                  />
-                </div>
-              );
-            })}
+            <div className="flex flex-wrap gap-2">
+              {activeFilters.map((item) => (
+                <button
+                  key={`${item.key}-${item.label}`}
+                  type="button"
+                  onClick={() => removeOneFilter(item.key)}
+                  className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100"
+                >
+                  {item.label}
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              ))}
+            </div>
           </div>
         </>
-      ) : null}
+      )}
 
-      <div className="flex gap-2">
-        <Button className="flex-1 rounded-xl" onClick={apply}>
-          Aplicar
+      <div className="mt-4 flex flex-col gap-2.5 pt-2">
+        <Button onClick={applyFilters} className="h-12 w-full rounded-2xl text-sm font-bold shadow-md shadow-primary/20 transition-all hover:scale-[1.02] hover:shadow-lg dark:shadow-primary/10">
+          Aplicar filtros
         </Button>
-        <Button variant="secondary" className="rounded-xl" onClick={clearAll}>
-          Limpiar
+        <Button variant="outline" onClick={clearAll} className="h-12 w-full rounded-2xl border-white/50 bg-white/50 text-sm font-semibold backdrop-blur-sm transition-all hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900/50 dark:hover:bg-zinc-800">
+          Limpiar todo
         </Button>
       </div>
     </div>
   );
 
-  // Mobile button -> Sheet
   if (variant === "button") {
     return (
-      <Sheet open={open} onOpenChange={setOpen}>
+      <Sheet>
         <SheetTrigger asChild>
-          <Button variant="secondary" className="rounded-xl">
+          <Button variant="outline" className="gap-2">
+            <SlidersHorizontal className="h-4 w-4" />
             Filtros
+            {activeFilters.length > 0 ? (
+              <Badge variant="secondary" className="ml-1">
+                {activeFilters.length}
+              </Badge>
+            ) : null}
           </Button>
         </SheetTrigger>
-        <SheetContent side="bottom" className="rounded-t-2xl">
-          <SheetHeader>
+
+        <SheetContent
+          side="bottom"
+          className="max-h-[85vh] overflow-y-auto rounded-t-3xl border-x-0 border-b-0 bg-white p-5"
+        >
+          <SheetHeader className="mb-4 text-left">
             <SheetTitle>Filtros</SheetTitle>
           </SheetHeader>
-          <div className="mt-4">{FiltersBody}</div>
+          {filtersBody}
         </SheetContent>
       </Sheet>
     );
   }
 
-  // Desktop sidebar
   return (
-    <Card className="rounded-2xl border bg-card p-4 sticky top-20">
-      <div className="mb-3 text-sm font-semibold tracking-tight">Filtros</div>
-      {FiltersBody}
+    <Card className="sticky top-24 overflow-hidden rounded-3xl border border-white/50 bg-white/40 p-6 shadow-xl shadow-black/5 ring-1 ring-zinc-200/50 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/40 dark:ring-white/5 dark:shadow-black/50">
+      <div className="absolute inset-0 bg-gradient-to-b from-white/40 to-white/0 pointer-events-none dark:from-white/5" />
+      <div className="relative z-10">{filtersBody}</div>
     </Card>
   );
 }

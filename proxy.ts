@@ -1,24 +1,37 @@
-// proxy.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 const RESERVED = new Set(["www", "localhost", "127", "lvh"]);
-const NO_REWRITE_PREFIXES = ["/login", "/logout", "/dashboard"];
+const NO_REWRITE_PREFIXES = ["/login", "/logout", "/dashboard", "/change-password"];
 
 function normalizeHost(rawHost: string | null) {
   if (!rawHost) return "";
   return rawHost.split(",")[0]!.trim().toLowerCase();
 }
 
+function getHost(req: NextRequest) {
+  return normalizeHost(req.headers.get("host") ?? req.headers.get("x-forwarded-host"));
+}
+
+function getSubdomain(host: string) {
+  const hostname = host.split(":")[0] ?? "";
+  const sub = hostname.split(".")[0] ?? "";
+  return !sub || RESERVED.has(sub) ? "" : sub;
+}
+
+function isGlobalRoute(pathname: string) {
+  return NO_REWRITE_PREFIXES.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`)
+  );
+}
+
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // ✅ evita doble rewrite: si ya estás bajo /sites, no tocar
   if (pathname === "/sites" || pathname.startsWith("/sites/")) {
     return NextResponse.next();
   }
 
-  // ✅ nunca reescribas assets internos / api
   if (
     pathname.startsWith("/_next") ||
     pathname.startsWith("/api") ||
@@ -27,7 +40,6 @@ export function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // ✅ no reescribas archivos estáticos del /public (svg, png, css, etc.)
   if (
     /\.[a-zA-Z0-9]+$/.test(pathname) ||
     pathname === "/robots.txt" ||
@@ -36,26 +48,28 @@ export function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // ✅ útil si en algún momento usas verificaciones/ACME
   if (pathname.startsWith("/.well-known/")) {
     return NextResponse.next();
   }
 
-  // ✅ rutas globales
-  if (NO_REWRITE_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
+  if (isGlobalRoute(pathname)) {
     return NextResponse.next();
   }
 
-  const host = normalizeHost(
-    req.headers.get("x-forwarded-host") ?? req.headers.get("host")
-  );
-  const hostname = host.split(":")[0];
-  const sub = hostname.split(".")[0];
+  const host = getHost(req);
+  const subdomain = getSubdomain(host);
 
-  const vertical = !sub || RESERVED.has(sub) ? "bienes" : sub;
+  // host raíz: deja que "/" lo atienda app/page.tsx
+  if (!subdomain && pathname === "/") {
+    return NextResponse.next();
+  }
+
+  // tenant host: sigue resolviendo sitio público por subdominio
+  const vertical = subdomain || "bienes";
 
   const url = req.nextUrl.clone();
-  url.pathname = `/sites/${vertical}${pathname}`;
+  url.pathname = pathname === "/" ? `/sites/${vertical}` : `/sites/${vertical}${pathname}`;
+
   return NextResponse.rewrite(url);
 }
 

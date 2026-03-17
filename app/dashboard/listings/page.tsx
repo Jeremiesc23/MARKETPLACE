@@ -15,7 +15,7 @@ type ListingRow = {
   title: string;
   price: number | null;
   currency: string | null;
-  status: string;
+  status: string; // draft|published|archived|deleted
   categoryName?: string | null;
   updatedAt?: string | null;
   imagesCount: number;
@@ -23,11 +23,74 @@ type ListingRow = {
 
 type HeadersLike = { get(name: string): string | null };
 
+type MeResponse = {
+  ok: boolean;
+  user?: {
+    id: number;
+    email: string;
+    role: string;
+    siteSubdomain?: string | null;
+  };
+};
+
+function firstHeaderValue(value: string | null) {
+  return value?.split(",")[0]?.trim() ?? "";
+}
+
+function getHost(h: HeadersLike) {
+  return firstHeaderValue(h.get("x-forwarded-host") ?? h.get("host")).toLowerCase();
+}
+
+function getProto(h: HeadersLike) {
+  return firstHeaderValue(h.get("x-forwarded-proto")) || "http";
+}
+
 function getBaseUrl(h: HeadersLike) {
-  const host = h.get("x-forwarded-host") ?? h.get("host");
-  const proto = h.get("x-forwarded-proto") ?? "http";
+  const host = getHost(h);
+  const proto = getProto(h);
   if (!host) throw new Error("No se pudo resolver el host de la petición");
   return `${proto}://${host}`;
+}
+
+function splitHostPort(host: string) {
+  const [hostname, port] = host.split(":");
+  return { hostname, port: port ? `:${port}` : "" };
+}
+
+function isIpv4(hostname: string) {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname);
+}
+
+function getApexHostname(hostname: string) {
+  if (!hostname || hostname === "localhost" || isIpv4(hostname)) return hostname;
+  if (hostname.endsWith(".localhost")) return "localhost";
+
+  const parts = hostname.split(".");
+  if (parts.length <= 2) return hostname;
+  return parts.slice(-2).join(".");
+}
+
+function getTenantSubdomain(host: string) {
+  const { hostname } = splitHostPort(host);
+
+  if (!hostname || hostname === "localhost" || isIpv4(hostname)) return "";
+  if (hostname.endsWith(".localhost")) return hostname.slice(0, -".localhost".length);
+
+  const parts = hostname.split(".");
+  if (parts.length <= 2) return "";
+  return parts.slice(0, -2).join(".");
+}
+
+function isTenantHost(host: string) {
+  return Boolean(getTenantSubdomain(host));
+}
+
+function buildTenantUrl(h: HeadersLike, subdomain: string, pathname: string) {
+  const proto = getProto(h);
+  const host = getHost(h);
+  const { hostname, port } = splitHostPort(host);
+  const apex = getApexHostname(hostname) || hostname;
+  return `${proto}://${subdomain}.${apex}${port}${pathname}`;
 }
 
 function extractArray<T = any>(payload: any): T[] {
@@ -59,6 +122,13 @@ function formatDate(value?: string | null) {
   return new Intl.DateTimeFormat("es-ES", { dateStyle: "short", timeStyle: "short" }).format(d);
 }
 
+function statusBadge(status: string) {
+  if (status === "published") return { variant: "default" as const, label: "Publicado" };
+  if (status === "archived") return { variant: "secondary" as const, label: "Suspendido" };
+  if (status === "deleted") return { variant: "destructive" as const, label: "Eliminado" };
+  return { variant: "secondary" as const, label: "Borrador" };
+}
+
 async function safeJson(res: Response) {
   try {
     return await res.json();
@@ -67,11 +137,25 @@ async function safeJson(res: Response) {
   }
 }
 
-async function getDashboardListings(): Promise<ListingRow[]> {
+async function getMe(h: HeadersLike): Promise<MeResponse | null> {
+  const baseUrl = getBaseUrl(h);
+
+  const res = await fetch(`${baseUrl}/api/auth/me`, {
+    method: "GET",
+    headers: { cookie: h.get("cookie") ?? "" },
+    cache: "no-store",
+  });
+
+  if (!res.ok) return null;
+  return (await res.json()) as MeResponse;
+}
+
+async function getDashboardListings(includeDeleted: boolean): Promise<ListingRow[]> {
   const h = await headers();
   const baseUrl = getBaseUrl(h);
 
-  const res = await fetch(`${baseUrl}/api/dashboard/listings`, {
+  const qs = includeDeleted ? "?includeDeleted=1" : "";
+  const res = await fetch(`${baseUrl}/api/dashboard/listings${qs}`, {
     headers: { cookie: h.get("cookie") ?? "" },
     cache: "no-store",
   });
@@ -104,8 +188,12 @@ type SearchParamsLike =
 
 export default async function DashboardListingsPage({ searchParams }: { searchParams?: SearchParamsLike }) {
   const sp = searchParams ? await searchParams : {};
+
   const okMsg = typeof sp.ok === "string" ? sp.ok : null;
   const errMsg = typeof sp.err === "string" ? sp.err : null;
+
+  const deletedParam = typeof sp.deleted === "string" ? sp.deleted : null;
+  const includeDeleted = deletedParam === "1" || deletedParam === "true";
 
   async function publishAction(formData: FormData) {
     "use server";
@@ -129,20 +217,93 @@ export default async function DashboardListingsPage({ searchParams }: { searchPa
 
     if (!res.ok) {
       const msg = data?.message || data?.error || `No se pudo publicar (HTTP ${res.status})`;
-      redirect(`/dashboard/listings?err=${encodeURIComponent(msg)}`);
+      redirect(`/dashboard/listings?err=${encodeURIComponent(msg)}${includeDeleted ? "&deleted=1" : ""}`);
     }
 
-    redirect(`/dashboard/listings?ok=${encodeURIComponent("Publicado correctamente")}`);
+    redirect(`/dashboard/listings?ok=${encodeURIComponent("Publicado correctamente")}${includeDeleted ? "&deleted=1" : ""}`);
+  }
+
+  async function archiveAction(formData: FormData) {
+    "use server";
+
+    const id = String(formData.get("id") ?? "");
+    if (!id) return;
+
+    const h = await headers();
+    const baseUrl = getBaseUrl(h);
+
+    const res = await fetch(`${baseUrl}/api/listings/${id}/archive`, {
+      method: "POST",
+      headers: { cookie: h.get("cookie") ?? "" },
+      cache: "no-store",
+    });
+
+    const data = await safeJson(res);
+
+    revalidatePath("/dashboard/listings");
+    revalidatePath(`/dashboard/listings/${id}/edit`);
+
+    if (!res.ok) {
+      const msg = data?.message || data?.error || `No se pudo suspender (HTTP ${res.status})`;
+      redirect(`/dashboard/listings?err=${encodeURIComponent(msg)}${includeDeleted ? "&deleted=1" : ""}`);
+    }
+
+    redirect(`/dashboard/listings?ok=${encodeURIComponent("Suspendido correctamente")}${includeDeleted ? "&deleted=1" : ""}`);
+  }
+
+  async function restoreAction(formData: FormData) {
+    "use server";
+
+    const id = String(formData.get("id") ?? "");
+    if (!id) return;
+
+    const h = await headers();
+    const baseUrl = getBaseUrl(h);
+
+    const res = await fetch(`${baseUrl}/api/listings/${id}/restore`, {
+      method: "POST",
+      headers: { cookie: h.get("cookie") ?? "" },
+      cache: "no-store",
+    });
+
+    const data = await safeJson(res);
+
+    revalidatePath("/dashboard/listings");
+    revalidatePath(`/dashboard/listings/${id}/edit`);
+
+    if (!res.ok) {
+      const msg = data?.message || data?.error || `No se pudo reactivar (HTTP ${res.status})`;
+      redirect(`/dashboard/listings?err=${encodeURIComponent(msg)}${includeDeleted ? "&deleted=1" : ""}`);
+    }
+
+    redirect(`/dashboard/listings?ok=${encodeURIComponent("Reactivado como borrador")}${includeDeleted ? "&deleted=1" : ""}`);
   }
 
   let listings: ListingRow[] = [];
   let error: string | null = null;
 
   try {
-    listings = await getDashboardListings();
+    listings = await getDashboardListings(includeDeleted);
   } catch (e: any) {
-    error = e?.message ?? "No se pudieron cargar las publicaciones";
+    const message = e?.message ?? "No se pudieron cargar las publicaciones";
+
+    if (message === "Forbidden") {
+      const h = await headers();
+      const me = await getMe(h);
+      const host = getHost(h);
+
+      if (me?.ok && me.user?.role !== "admin" && me.user?.siteSubdomain && !isTenantHost(host)) {
+        redirect(buildTenantUrl(h, me.user.siteSubdomain, "/dashboard/listings"));
+      }
+
+      redirect("/login");
+    }
+
+    error = message;
   }
+
+  const toggleHref = includeDeleted ? "/dashboard/listings" : "/dashboard/listings?deleted=1";
+  const toggleLabel = includeDeleted ? "Ocultar eliminados" : "Mostrar eliminados";
 
   return (
     <div>
@@ -150,13 +311,17 @@ export default async function DashboardListingsPage({ searchParams }: { searchPa
         title="Publicaciones"
         description="Administra tus productos y crea nuevas publicaciones."
         actions={
-          <Link href="/dashboard/listings/new">
-            <Button>Nueva publicación</Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link href={toggleHref}>
+              <Button variant="outline">{toggleLabel}</Button>
+            </Link>
+            <Link href="/dashboard/listings/new">
+              <Button>Nueva publicación</Button>
+            </Link>
+          </div>
         }
       />
 
-      {/* mensajes */}
       <div className="grid gap-3">
         {okMsg ? (
           <Card className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3 text-sm">
@@ -179,10 +344,9 @@ export default async function DashboardListingsPage({ searchParams }: { searchPa
 
       <Separator className="my-5" />
 
-      {/* empty state */}
       {!error && listings.length === 0 ? (
         <Card className="rounded-2xl p-6">
-          <div className="text-sm font-medium">Aún no tienes publicaciones.</div>
+          <div className="text-sm font-medium">Aún no tienes publicaciones{includeDeleted ? " (incluyendo eliminadas)" : ""}.</div>
           <div className="mt-1 text-sm text-muted-foreground">
             Crea tu primera publicación para empezar a vender.
           </div>
@@ -194,12 +358,16 @@ export default async function DashboardListingsPage({ searchParams }: { searchPa
         </Card>
       ) : null}
 
-      {/* Mobile list (cards) */}
       {!error && listings.length > 0 ? (
         <div className="grid gap-3 md:hidden">
           {listings.map((row) => {
-            const isPublished = row.status === "published";
+            const badge = statusBadge(row.status);
             const hasImages = row.imagesCount > 0;
+
+            const canPublish = row.status === "draft";
+            const canArchive = row.status === "published";
+            const canRestore = row.status === "archived";
+            const isDeleted = row.status === "deleted";
 
             return (
               <Card key={row.id} className="rounded-2xl p-4">
@@ -212,9 +380,7 @@ export default async function DashboardListingsPage({ searchParams }: { searchPa
                       {row.categoryName || "—"} • {formatMoney(row.price, row.currency)}
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <Badge variant={isPublished ? "default" : "secondary"}>
-                        {isPublished ? "Publicado" : "Borrador"}
-                      </Badge>
+                      <Badge variant={badge.variant}>{badge.label}</Badge>
                       <span className="text-xs text-muted-foreground">{row.imagesCount} img</span>
                       <span className="text-xs text-muted-foreground">• {formatDate(row.updatedAt)}</span>
                     </div>
@@ -228,16 +394,36 @@ export default async function DashboardListingsPage({ searchParams }: { searchPa
                     </Button>
                   </Link>
 
-                  {!isPublished ? (
+                  {canPublish ? (
                     <form action={publishAction} className="flex items-center gap-2">
                       <input type="hidden" name="id" value={row.id} />
                       <Button size="sm" disabled={!hasImages}>
                         Publicar
                       </Button>
-                      {!hasImages ? (
-                        <span className="text-xs text-destructive">Sube 1 imagen</span>
-                      ) : null}
+                      {!hasImages ? <span className="text-xs text-destructive">Sube 1 imagen</span> : null}
                     </form>
+                  ) : null}
+
+                  {canArchive ? (
+                    <form action={archiveAction}>
+                      <input type="hidden" name="id" value={row.id} />
+                      <Button variant="secondary" size="sm">
+                        Suspender
+                      </Button>
+                    </form>
+                  ) : null}
+
+                  {canRestore ? (
+                    <form action={restoreAction}>
+                      <input type="hidden" name="id" value={row.id} />
+                      <Button variant="secondary" size="sm">
+                        Reactivar
+                      </Button>
+                    </form>
+                  ) : null}
+
+                  {isDeleted ? (
+                    <span className="text-xs text-muted-foreground">Eliminado</span>
                   ) : null}
                 </div>
               </Card>
@@ -246,12 +432,11 @@ export default async function DashboardListingsPage({ searchParams }: { searchPa
         </div>
       ) : null}
 
-      {/* Desktop table */}
       {!error && listings.length > 0 ? (
         <div className="hidden md:block">
           <Card className="rounded-2xl">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[820px] text-sm">
+              <table className="w-full min-w-[920px] text-sm">
                 <thead>
                   <tr className="border-b">
                     <th className="px-4 py-3 text-left font-medium text-muted-foreground">ID</th>
@@ -266,8 +451,12 @@ export default async function DashboardListingsPage({ searchParams }: { searchPa
 
                 <tbody>
                   {listings.map((row) => {
-                    const isPublished = row.status === "published";
+                    const badge = statusBadge(row.status);
                     const hasImages = row.imagesCount > 0;
+
+                    const canPublish = row.status === "draft";
+                    const canArchive = row.status === "published";
+                    const canRestore = row.status === "archived";
 
                     return (
                       <tr key={row.id} className="border-b last:border-b-0">
@@ -280,9 +469,7 @@ export default async function DashboardListingsPage({ searchParams }: { searchPa
 
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
-                            <Badge variant={isPublished ? "default" : "secondary"}>
-                              {isPublished ? "Publicado" : "Borrador"}
-                            </Badge>
+                            <Badge variant={badge.variant}>{badge.label}</Badge>
                             <span className="text-xs text-muted-foreground">{row.imagesCount} img</span>
                           </div>
                         </td>
@@ -297,15 +484,31 @@ export default async function DashboardListingsPage({ searchParams }: { searchPa
                               </Button>
                             </Link>
 
-                            {!isPublished ? (
+                            {canPublish ? (
                               <form action={publishAction} className="flex items-center gap-2">
                                 <input type="hidden" name="id" value={row.id} />
                                 <Button size="sm" disabled={!hasImages}>
                                   Publicar
                                 </Button>
-                                {!hasImages ? (
-                                  <span className="text-xs text-destructive">Sube 1 imagen</span>
-                                ) : null}
+                                {!hasImages ? <span className="text-xs text-destructive">Sube 1 imagen</span> : null}
+                              </form>
+                            ) : null}
+
+                            {canArchive ? (
+                              <form action={archiveAction}>
+                                <input type="hidden" name="id" value={row.id} />
+                                <Button variant="secondary" size="sm">
+                                  Suspender
+                                </Button>
+                              </form>
+                            ) : null}
+
+                            {canRestore ? (
+                              <form action={restoreAction}>
+                                <input type="hidden" name="id" value={row.id} />
+                                <Button variant="secondary" size="sm">
+                                  Reactivar
+                                </Button>
                               </form>
                             ) : null}
                           </div>

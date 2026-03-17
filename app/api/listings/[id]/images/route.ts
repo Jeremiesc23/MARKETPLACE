@@ -8,6 +8,7 @@ import {
   createListingImageRecord,
   getListingImagesForSite,
 } from "@/src/server/modules/listings/listingImages.service";
+import { getListingForSite } from "@/src/server/modules/listings/listings.service";
 
 export const runtime = "nodejs";
 
@@ -17,10 +18,13 @@ function parseListingId(id: string) {
   return n;
 }
 
-export async function GET(
-  req: Request,
-  context: { params: Promise<{ id: string }> }
-) {
+async function assertListingNotDeleted(listingId: number, siteId: number) {
+  const listing = await getListingForSite(listingId, siteId);
+  if (!listing) throw new AppError("No existe", 404);
+  if (listing.status === "deleted") throw new AppError("Publicación eliminada", 410);
+}
+
+export async function GET(req: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const session = requireAuth(req);
     const site = await getSiteFromRequest(req);
@@ -30,6 +34,7 @@ export async function GET(
 
     await requireOwnerOrAdmin(session, listingId, site.id);
 
+    // ✅ GET permitido incluso si está deleted (historial)
     const images = await getListingImagesForSite(listingId, site.id);
 
     return NextResponse.json({ ok: true, images });
@@ -40,10 +45,7 @@ export async function GET(
   }
 }
 
-export async function POST(
-  req: Request,
-  context: { params: Promise<{ id: string }> }
-) {
+export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
   try {
     assertSameOriginForMutation(req);
 
@@ -54,6 +56,9 @@ export async function POST(
     const listingId = parseListingId(id);
 
     await requireOwnerOrAdmin(session, listingId, site.id);
+
+    // 🔒 bloquear mutación si está deleted
+    await assertListingNotDeleted(listingId, site.id);
 
     const body = await req.json().catch(() => ({}));
 

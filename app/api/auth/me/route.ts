@@ -1,3 +1,4 @@
+//app/api/auth/me/route.ts
 import { NextResponse } from "next/server";
 import { requireAuth } from "@/src/server/shared/auth";
 import { AppError } from "@/src/server/shared/errors";

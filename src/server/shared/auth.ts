@@ -1,3 +1,4 @@
+//src/server/shared/auth.ts
 import jwt from "jsonwebtoken";
 import type { NextResponse } from "next/server";
 import { AppError } from "./errors";

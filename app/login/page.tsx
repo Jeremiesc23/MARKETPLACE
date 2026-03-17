@@ -1,7 +1,8 @@
+//app/login/page.tsx
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 
@@ -11,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { ThemeToggle } from "@/components/theme-toggle";
 
-export default function LoginPage() {
+function LoginContent() {
   const sp = useSearchParams();
   const next = sp.get("next") || "/dashboard/listings";
 
@@ -43,6 +44,11 @@ export default function LoginPage() {
         return;
       }
 
+      if (data?.mustChangePassword) {
+        window.location.assign("/change-password");
+        return;
+      }
+
       window.location.assign(next);
     } catch {
       setMsg("No se pudo iniciar sesión");
@@ -54,7 +60,6 @@ export default function LoginPage() {
   return (
     <main className="min-h-dvh bg-muted/30 px-4 py-10">
       <div className="mx-auto flex w-full max-w-md flex-col gap-6">
-        {/* Top mini header */}
         <div className="flex items-center justify-between">
           <Link href="/" className="text-sm font-semibold tracking-tight">
             Marketplace
@@ -147,5 +152,13 @@ export default function LoginPage() {
         </p>
       </div>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-dvh bg-muted/30 px-4 py-10 flex items-center justify-center text-sm text-muted-foreground">Cargando...</div>}>
+      <LoginContent />
+    </Suspense>
   );
 }

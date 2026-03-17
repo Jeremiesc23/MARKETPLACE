@@ -14,7 +14,12 @@ export async function POST(req: Request) {
 
     const result = await login(data.email, data.password);
 
-    const res = NextResponse.json({ ok: true, user: result.user });
+    const res = NextResponse.json({
+      ok: true,
+      user: result.user,
+      mustChangePassword: result.mustChangePassword,
+    });
+
     setSessionCookie(res, result.token);
     return res;
   } catch (err: any) {

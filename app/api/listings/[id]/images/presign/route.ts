@@ -5,13 +5,17 @@ import { requireOwnerOrAdmin, assertSameOriginForMutation } from "@/src/server/s
 import { AppError } from "@/src/server/shared/errors";
 import { getSiteFromRequest } from "@/src/server/shared/tenant";
 import { createListingImagePresign } from "@/src/server/modules/listings/listingImages.service";
+import { getListingForSite } from "@/src/server/modules/listings/listings.service";
 
 export const runtime = "nodejs";
 
-export async function POST(
-  req: Request,
-  context: { params: Promise<{ id: string }> }
-) {
+async function assertListingNotDeleted(listingId: number, siteId: number) {
+  const listing = await getListingForSite(listingId, siteId);
+  if (!listing) throw new AppError("No existe", 404);
+  if (listing.status === "deleted") throw new AppError("Publicación eliminada", 410);
+}
+
+export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
   try {
     assertSameOriginForMutation(req);
 
@@ -23,6 +27,9 @@ export async function POST(
     if (!Number.isFinite(listingId) || listingId <= 0) throw new AppError("ID inválido", 400);
 
     await requireOwnerOrAdmin(session, listingId, site.id);
+
+    // 🔒 bloquear mutación si está deleted
+    await assertListingNotDeleted(listingId, site.id);
 
     const body = await req.json().catch(() => ({}));
     const contentType = String(body?.contentType ?? "");

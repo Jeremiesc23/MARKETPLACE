@@ -15,6 +15,7 @@ type Field = {
 
 function parseMaybeJson(v: unknown) {
   if (typeof v !== "string") return v;
+
   try {
     return JSON.parse(v);
   } catch {
@@ -62,7 +63,10 @@ export default function PublicAttributesBlock({
     let cancelled = false;
 
     async function load() {
-      if (!categoryId) return;
+      if (!categoryId) {
+        setFields([]);
+        return;
+      }
 
       setLoading(true);
       setError(null);
@@ -84,8 +88,13 @@ export default function PublicAttributesBlock({
         );
 
         if (!cancelled) setFields(nextFields);
-      } catch (e: any) {
-        if (!cancelled) setError(e?.message ?? "No se pudieron cargar los detalles");
+      } catch (e: unknown) {
+        const message =
+          e instanceof Error
+            ? e.message
+            : "No se pudieron cargar los detalles";
+
+        if (!cancelled) setError(message);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -100,30 +109,46 @@ export default function PublicAttributesBlock({
 
   const rows = useMemo(() => {
     const attrs = attributes || {};
+
     return fields
       .map((f) => {
-        const v = formatValue(f, attrs[f.key]);
-        if (v == null) return null;
-        return { label: f.label, value: v };
+        const value = formatValue(f, attrs[f.key]);
+        if (value == null) return null;
+        return { label: f.label, value };
       })
-      .filter(Boolean) as { label: string; value: string }[];
+      .filter(Boolean) as Array<{ label: string; value: string }>;
   }, [fields, attributes]);
 
   if (!categoryId) return null;
-  if (loading) return <p style={{ opacity: 0.7 }}>Cargando detalles…</p>;
-  if (error) return <p style={{ color: "crimson" }}>{error}</p>;
+
+  if (loading) {
+    return (
+      <div className="text-sm text-muted-foreground">Cargando detalles…</div>
+    );
+  }
+
+  if (error) {
+    return <div className="text-sm text-destructive">{error}</div>;
+  }
+
   if (rows.length === 0) return null;
 
   return (
-    <section style={{ marginTop: 16 }}>
-      <h3 style={{ marginBottom: 8 }}>Detalles</h3>
-      <ul style={{ margin: 0, paddingLeft: 18 }}>
-        {rows.map((r) => (
-          <li key={r.label}>
-            <strong>{r.label}:</strong> {r.value}
-          </li>
-        ))}
-      </ul>
-    </section>
+    <dl className="grid gap-3 sm:grid-cols-2">
+      {rows.map((row) => (
+        <div
+          key={row.label}
+          className="group relative overflow-hidden rounded-2xl border border-white/40 bg-white/40 p-4 shadow-sm ring-1 ring-zinc-200/50 backdrop-blur-md transition-all hover:bg-white/80 dark:border-white/5 dark:bg-black/20 dark:ring-white/5 dark:hover:bg-zinc-900/50"
+        >
+          <div className="absolute left-0 top-0 h-full w-1 bg-gradient-to-b from-primary/50 to-primary/10 opacity-0 transition-opacity group-hover:opacity-100" />
+          <dt className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-500">
+            {row.label}
+          </dt>
+          <dd className="mt-1.5 text-sm font-medium leading-snug text-zinc-900 dark:text-zinc-100">
+            {row.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }

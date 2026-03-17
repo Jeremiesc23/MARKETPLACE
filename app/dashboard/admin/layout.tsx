@@ -48,24 +48,28 @@ function isIpv4(hostname: string) {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname);
 }
 
-function getApexHostname(hostname: string) {
-  if (!hostname || hostname === "localhost" || isIpv4(hostname)) return hostname;
-  if (hostname.endsWith(".localhost")) return "localhost";
+const ROOT_DOMAIN = (process.env.ROOT_DOMAIN || "").toLowerCase();
+const DEV_ROOT_DOMAIN = (process.env.DEV_ROOT_DOMAIN || "lvh.me").toLowerCase();
 
-  const parts = hostname.split(".");
-  if (parts.length <= 2) return hostname;
-  return parts.slice(-2).join(".");
+function getApexHostname(hostname: string) {
+  if (ROOT_DOMAIN && (hostname === ROOT_DOMAIN || hostname.endsWith(`.${ROOT_DOMAIN}`))) {
+    return ROOT_DOMAIN;
+  }
+  if (DEV_ROOT_DOMAIN && (hostname === DEV_ROOT_DOMAIN || hostname.endsWith(`.${DEV_ROOT_DOMAIN}`))) {
+    return DEV_ROOT_DOMAIN;
+  }
+  return hostname;
 }
 
 function getTenantSubdomain(host: string) {
   const { hostname } = splitHostPort(host);
-
-  if (!hostname || hostname === "localhost" || isIpv4(hostname)) return "";
-  if (hostname.endsWith(".localhost")) return hostname.slice(0, -".localhost".length);
-
-  const parts = hostname.split(".");
-  if (parts.length <= 2) return "";
-  return parts.slice(0, -2).join(".");
+  if (ROOT_DOMAIN && hostname.endsWith(`.${ROOT_DOMAIN}`)) {
+    return hostname.slice(0, -(`.${ROOT_DOMAIN}`.length));
+  }
+  if (DEV_ROOT_DOMAIN && hostname.endsWith(`.${DEV_ROOT_DOMAIN}`)) {
+    return hostname.slice(0, -(`.${DEV_ROOT_DOMAIN}`.length));
+  }
+  return "";
 }
 
 function isTenantHost(host: string) {

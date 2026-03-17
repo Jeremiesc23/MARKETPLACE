@@ -1,8 +1,22 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const RESERVED = new Set(["www", "localhost", "127", "lvh"]);
-const NO_REWRITE_PREFIXES = ["/login", "/logout", "/dashboard", "/change-password"];
+const ROOT_DOMAIN = (process.env.ROOT_DOMAIN || "").toLowerCase();
+const DEV_ROOT_DOMAIN = (process.env.DEV_ROOT_DOMAIN || "lvh.me").toLowerCase();
+
+const RESERVED_SUBDOMAINS = new Set([
+  "www",
+  "admin",
+  "localhost",
+  "127",
+]);
+
+const GLOBAL_ROUTES = [
+  "/login",
+  "/logout",
+  "/dashboard",
+  "/change-password",
+];
 
 function normalizeHost(rawHost: string | null) {
   if (!rawHost) return "";
@@ -10,65 +24,89 @@ function normalizeHost(rawHost: string | null) {
 }
 
 function getHost(req: NextRequest) {
-  return normalizeHost(req.headers.get("host") ?? req.headers.get("x-forwarded-host"));
+  const forwarded = req.headers.get("x-forwarded-host");
+  const host = req.headers.get("host");
+  return normalizeHost(forwarded ?? host).split(":")[0] ?? "";
 }
 
-function getSubdomain(host: string) {
-  const hostname = host.split(":")[0] ?? "";
-  const sub = hostname.split(".")[0] ?? "";
-  return !sub || RESERVED.has(sub) ? "" : sub;
-}
-
-function isGlobalRoute(pathname: string) {
-  return NO_REWRITE_PREFIXES.some(
-    (p) => pathname === p || pathname.startsWith(`${p}/`)
+function isStaticOrInternal(pathname: string) {
+  return (
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/api") ||
+    pathname === "/favicon.ico" ||
+    pathname === "/robots.txt" ||
+    pathname === "/sitemap.xml" ||
+    pathname.startsWith("/.well-known/") ||
+    /\.[a-zA-Z0-9]+$/.test(pathname)
   );
 }
 
+function isGlobalRoute(pathname: string) {
+  return GLOBAL_ROUTES.some(
+    (route) => pathname === route || pathname.startsWith(`${route}/`)
+  );
+}
+
+function isRootHost(host: string) {
+  const isLocalRoot =
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === DEV_ROOT_DOMAIN;
+
+  const isProdRoot =
+    !!ROOT_DOMAIN &&
+    (host === ROOT_DOMAIN || host === `www.${ROOT_DOMAIN}`);
+
+  return isLocalRoot || isProdRoot;
+}
+
+function extractTenant(host: string) {
+  if (ROOT_DOMAIN && host.endsWith(`.${ROOT_DOMAIN}`)) {
+    const subdomain = host.slice(0, -(`.${ROOT_DOMAIN}`.length));
+    return RESERVED_SUBDOMAINS.has(subdomain) ? "" : subdomain;
+  }
+
+  if (DEV_ROOT_DOMAIN && host.endsWith(`.${DEV_ROOT_DOMAIN}`)) {
+    const subdomain = host.slice(0, -(`.${DEV_ROOT_DOMAIN}`.length));
+    return RESERVED_SUBDOMAINS.has(subdomain) ? "" : subdomain;
+  }
+
+  return "";
+}
+
 export function proxy(req: NextRequest) {
-  const { pathname } = req.nextUrl;
+  const url = req.nextUrl.clone();
+  const { pathname } = url;
+  const host = getHost(req);
+
+  if (isStaticOrInternal(pathname)) {
+    return NextResponse.next();
+  }
 
   if (pathname === "/sites" || pathname.startsWith("/sites/")) {
     return NextResponse.next();
   }
 
-  if (
-    pathname.startsWith("/_next") ||
-    pathname.startsWith("/api") ||
-    pathname === "/favicon.ico"
-  ) {
+  if (ROOT_DOMAIN && host === `www.${ROOT_DOMAIN}`) {
+    const redirectUrl = req.nextUrl.clone();
+    redirectUrl.host = ROOT_DOMAIN;
+    return NextResponse.redirect(redirectUrl, 308);
+  }
+
+  // Dominio raíz o rutas globales = admin
+  if (isRootHost(host) || isGlobalRoute(pathname)) {
     return NextResponse.next();
   }
 
-  if (
-    /\.[a-zA-Z0-9]+$/.test(pathname) ||
-    pathname === "/robots.txt" ||
-    pathname === "/sitemap.xml"
-  ) {
+  // Subdominio = tenant público
+  const tenant = extractTenant(host);
+
+  if (!tenant) {
     return NextResponse.next();
   }
 
-  if (pathname.startsWith("/.well-known/")) {
-    return NextResponse.next();
-  }
-
-  if (isGlobalRoute(pathname)) {
-    return NextResponse.next();
-  }
-
-  const host = getHost(req);
-  const subdomain = getSubdomain(host);
-
-  // host raíz: deja que "/" lo atienda app/page.tsx
-  if (!subdomain && pathname === "/") {
-    return NextResponse.next();
-  }
-
-  // tenant host: sigue resolviendo sitio público por subdominio
-  const vertical = subdomain || "bienes";
-
-  const url = req.nextUrl.clone();
-  url.pathname = pathname === "/" ? `/sites/${vertical}` : `/sites/${vertical}${pathname}`;
+  url.pathname =
+    pathname === "/" ? `/sites/${tenant}` : `/sites/${tenant}${pathname}`;
 
   return NextResponse.rewrite(url);
 }

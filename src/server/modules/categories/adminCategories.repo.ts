@@ -34,14 +34,25 @@ export async function adminListCategoriesByVertical(
   verticalSlug: string
 ): Promise<AdminCategoryRow[]> {
   const db = getDb();
+  const normalizedVertical = verticalSlug.trim().toLowerCase();
+  const likeVertical = `%${normalizedVertical}%`;
+  const prefixVertical = `${normalizedVertical}%`;
   const [rows] = await db.query<CategoryRowPacket[]>(
     `
     SELECT id, name, slug, vertical_slug, is_active, created_at
     FROM categories
-    WHERE vertical_slug = ?
-    ORDER BY name ASC, id DESC
+    WHERE LOWER(vertical_slug) LIKE ?
+    ORDER BY
+      CASE
+        WHEN LOWER(vertical_slug) = ? THEN 0
+        WHEN LOWER(vertical_slug) LIKE ? THEN 1
+        ELSE 2
+      END,
+      vertical_slug ASC,
+      name ASC,
+      id DESC
     `,
-    [verticalSlug]
+    [likeVertical, normalizedVertical, prefixVertical]
   );
 
   return rows.map(mapCategoryRow);

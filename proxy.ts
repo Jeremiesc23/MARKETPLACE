@@ -2,15 +2,21 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const ROOT_DOMAIN = (process.env.ROOT_DOMAIN || "").toLowerCase();
-const DEV_ROOT_DOMAIN = (process.env.DEV_ROOT_DOMAIN || "lvh.me").toLowerCase();
+import {
+  buildRootUrl,
+  buildTenantUrlFromHost,
+  extractTenantSubdomain,
+  getHostFromHeaders,
+  getProtoFromHeaders,
+  isAllowedTenantSubdomain,
+  isRootHost,
+  isTenantHost,
+  normalizeHost,
+  parseInternalTenantPath,
+  toExternalAdminPath,
+} from "@/lib/host-routing";
 
-const RESERVED_SUBDOMAINS = new Set([
-  "www",
-  "admin",
-  "localhost",
-  "127",
-]);
+const ROOT_DOMAIN = (process.env.ROOT_DOMAIN || "").toLowerCase();
 
 const GLOBAL_ROUTES = [
   "/login",
@@ -18,17 +24,6 @@ const GLOBAL_ROUTES = [
   "/dashboard",
   "/change-password",
 ];
-
-function normalizeHost(rawHost: string | null) {
-  if (!rawHost) return "";
-  return rawHost.split(",")[0]!.trim().toLowerCase();
-}
-
-function getHost(req: NextRequest) {
-  const forwarded = req.headers.get("x-forwarded-host");
-  const host = req.headers.get("host");
-  return normalizeHost(forwarded ?? host).split(":")[0] ?? "";
-}
 
 function isStaticOrInternal(pathname: string) {
   return (
@@ -48,44 +43,34 @@ function isGlobalRoute(pathname: string) {
   );
 }
 
-function isRootHost(host: string) {
-  const isLocalRoot =
-    host === "localhost" ||
-    host === "127.0.0.1" ||
-    host === DEV_ROOT_DOMAIN;
-
-  const isProdRoot =
-    !!ROOT_DOMAIN &&
-    (host === ROOT_DOMAIN || host === `www.${ROOT_DOMAIN}`);
-
-  return isLocalRoot || isProdRoot;
-}
-
-function extractTenant(host: string) {
-  if (ROOT_DOMAIN && host.endsWith(`.${ROOT_DOMAIN}`)) {
-    const subdomain = host.slice(0, -(`.${ROOT_DOMAIN}`.length));
-    return RESERVED_SUBDOMAINS.has(subdomain) ? "" : subdomain;
-  }
-
-  if (DEV_ROOT_DOMAIN && host.endsWith(`.${DEV_ROOT_DOMAIN}`)) {
-    const subdomain = host.slice(0, -(`.${DEV_ROOT_DOMAIN}`.length));
-    return RESERVED_SUBDOMAINS.has(subdomain) ? "" : subdomain;
-  }
-
-  return "";
-}
-
 export function proxy(req: NextRequest) {
   const url = req.nextUrl.clone();
   const { pathname } = url;
-  const host = getHost(req);
+  const host = normalizeHost(getHostFromHeaders(req.headers));
 
   if (isStaticOrInternal(pathname)) {
     return NextResponse.next();
   }
 
-  if (pathname === "/sites" || pathname.startsWith("/sites/")) {
-    return NextResponse.next();
+  const directTenantPath = parseInternalTenantPath(pathname);
+  if (directTenantPath) {
+    if (isAllowedTenantSubdomain(directTenantPath.tenant)) {
+      const redirectUrl = new URL(
+        buildTenantUrlFromHost(
+          host,
+          getProtoFromHeaders(req.headers),
+          directTenantPath.tenant,
+          directTenantPath.pathname
+        )
+      );
+      redirectUrl.search = url.search;
+      return NextResponse.redirect(redirectUrl, 308);
+    }
+
+    const redirectUrl = req.nextUrl.clone();
+    redirectUrl.pathname = "/";
+    redirectUrl.search = "";
+    return NextResponse.redirect(redirectUrl, 308);
   }
 
   if (ROOT_DOMAIN && host === `www.${ROOT_DOMAIN}`) {
@@ -94,13 +79,34 @@ export function proxy(req: NextRequest) {
     return NextResponse.redirect(redirectUrl, 308);
   }
 
-  // Dominio raíz o rutas globales = admin
+  if (pathname === "/dashboard/admin" || pathname.startsWith("/dashboard/admin/")) {
+    const destinationPath = toExternalAdminPath(pathname);
+    const redirectUrl = req.nextUrl.clone();
+
+    if (isTenantHost(host)) {
+      redirectUrl.href = buildRootUrl(req.headers, destinationPath);
+    } else {
+      redirectUrl.pathname = destinationPath;
+    }
+
+    return NextResponse.redirect(redirectUrl, 308);
+  }
+
+  if (pathname === "/admin" || pathname.startsWith("/admin/")) {
+    if (isTenantHost(host)) {
+      const redirectUrl = new URL(buildRootUrl(req.headers, pathname));
+      redirectUrl.search = url.search;
+      return NextResponse.redirect(redirectUrl, 308);
+    }
+
+    return NextResponse.next();
+  }
+
   if (isRootHost(host) || isGlobalRoute(pathname)) {
     return NextResponse.next();
   }
 
-  // Subdominio = tenant público
-  const tenant = extractTenant(host);
+  const tenant = extractTenantSubdomain(host);
 
   if (!tenant) {
     return NextResponse.next();

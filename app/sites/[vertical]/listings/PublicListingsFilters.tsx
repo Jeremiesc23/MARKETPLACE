@@ -1,18 +1,18 @@
-// app/sites/[vertical]/listings/PublicListingsFilters.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { SlidersHorizontal, Search, X } from "lucide-react";
+import { Search, SlidersHorizontal, X } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -35,17 +35,33 @@ type Field = {
 
 type FiltersVariant = "sidebar" | "button";
 
+const fieldLabelClass =
+  "text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100";
+
+const controlClassName =
+  "h-12 w-full rounded-xl border border-zinc-200 bg-white px-3.5 text-sm text-zinc-900 shadow-sm transition placeholder:text-zinc-400 focus-visible:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500";
+
+const selectClassName =
+  "h-12 w-full rounded-xl border border-zinc-200 bg-white px-3.5 text-sm text-zinc-900 shadow-sm outline-none transition focus-visible:border-primary/40 focus-visible:ring-2 focus-visible:ring-primary/20 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-100";
+
 function setParam(sp: URLSearchParams, key: string, value: string | null) {
   if (value == null || value.trim() === "") sp.delete(key);
   else sp.set(key, value);
 }
 
-function parseArray<T = any>(payload: any): T[] {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.items)) return payload.items;
-  if (Array.isArray(payload?.data)) return payload.data;
-  if (Array.isArray(payload?.categories)) return payload.categories;
-  if (Array.isArray(payload?.fields)) return payload.fields;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function parseArray<T = unknown>(payload: unknown): T[] {
+  if (Array.isArray(payload)) return payload as T[];
+
+  if (!isRecord(payload)) return [];
+
+  if (Array.isArray(payload.items)) return payload.items as T[];
+  if (Array.isArray(payload.data)) return payload.data as T[];
+  if (Array.isArray(payload.categories)) return payload.categories as T[];
+  if (Array.isArray(payload.fields)) return payload.fields as T[];
   return [];
 }
 
@@ -73,8 +89,8 @@ function niceDynLabel(key: string, value: string, fields: Field[]) {
   const base = raw.replace(/_(min|max)$/, "");
   const fieldLabel = fields.find((f) => f.key === base)?.label ?? base;
 
-  if (raw.endsWith("_min")) return `${fieldLabel} ≥ ${value}`;
-  if (raw.endsWith("_max")) return `${fieldLabel} ≤ ${value}`;
+  if (raw.endsWith("_min")) return `${fieldLabel} >= ${value}`;
+  if (raw.endsWith("_max")) return `${fieldLabel} <= ${value}`;
   if (value === "true") return fieldLabel;
   return `${fieldLabel}: ${value}`;
 }
@@ -125,10 +141,10 @@ export default function PublicListingsFilters({
         const data = await res.json().catch(() => null);
         if (!res.ok || cancelled) return;
 
-        const items = parseArray<any>(data).map((c) => ({
+        const items = parseArray<Record<string, unknown>>(data).map((c) => ({
           id: Number(c.id),
           name: String(c.name ?? ""),
-          slug: c.slug ? String(c.slug) : undefined,
+          slug: typeof c.slug === "string" ? c.slug : undefined,
         }));
 
         setCategories(items);
@@ -165,12 +181,12 @@ export default function PublicListingsFilters({
           return;
         }
 
-        const nextFields = parseArray<any>(data).map((f) => ({
+        const nextFields = parseArray<Record<string, unknown>>(data).map((f) => ({
           key: String(f.key),
           label: String(f.label ?? f.key),
           type: (f.type ?? "text") as Field["type"],
           options: f.options ?? null,
-          constraints: f.constraints ?? null,
+          constraints: isRecord(f.constraints) ? f.constraints : null,
           isRequired: Boolean(f.isRequired ?? f.is_required ?? false),
         }));
 
@@ -200,8 +216,8 @@ export default function PublicListingsFilters({
       }
     }
 
-    if (minPrice) items.push({ key: "minPrice", label: `Precio ≥ ${minPrice}` });
-    if (maxPrice) items.push({ key: "maxPrice", label: `Precio ≤ ${maxPrice}` });
+    if (minPrice) items.push({ key: "minPrice", label: `Precio >= ${minPrice}` });
+    if (maxPrice) items.push({ key: "maxPrice", label: `Precio <= ${maxPrice}` });
     if (sort && sort !== "newest") {
       const sortMap: Record<string, string> = {
         newest: "Más recientes",
@@ -264,7 +280,7 @@ export default function PublicListingsFilters({
       return (
         <label
           key={field.key}
-          className="flex items-center gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3"
+          className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-3.5 py-3 text-sm font-medium text-zinc-700 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-200"
         >
           <input
             type="checkbox"
@@ -275,9 +291,9 @@ export default function PublicListingsFilters({
                 [fieldKey]: e.target.checked ? "true" : "",
               }))
             }
-            className="h-4 w-4 rounded border-zinc-300"
+            className="h-4 w-4 rounded border-zinc-300 text-primary focus:ring-primary/40"
           />
-          <span className="text-sm font-medium text-zinc-700">{field.label}</span>
+          <span>{field.label}</span>
         </label>
       );
     }
@@ -287,7 +303,7 @@ export default function PublicListingsFilters({
 
       return (
         <div key={field.key} className="space-y-2">
-          <label className="text-sm font-medium text-zinc-700">{field.label}</label>
+          <label className={fieldLabelClass}>{field.label}</label>
           <select
             value={value}
             onChange={(e) =>
@@ -296,7 +312,7 @@ export default function PublicListingsFilters({
                 [fieldKey]: e.target.value,
               }))
             }
-            className="flex h-12 w-full rounded-2xl border border-white/40 bg-white/60 px-4 text-sm font-medium text-zinc-900 shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] outline-none ring-0 backdrop-blur-md transition-all focus:border-primary/50 focus:bg-white dark:border-white/10 dark:bg-black/20 dark:text-zinc-100 dark:focus:border-primary/50 dark:focus:bg-black/40"
+            className={selectClassName}
           >
             <option value="">Todos</option>
             {options.map((opt) => (
@@ -313,7 +329,7 @@ export default function PublicListingsFilters({
       return (
         <div key={field.key} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-2">
-            <label className="text-sm font-medium text-zinc-700">{field.label} mín.</label>
+            <label className={fieldLabelClass}>{field.label} mín.</label>
             <Input
               type="number"
               inputMode="decimal"
@@ -325,10 +341,11 @@ export default function PublicListingsFilters({
                 }))
               }
               placeholder="Mínimo"
+              className={controlClassName}
             />
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium text-zinc-700">{field.label} máx.</label>
+            <label className={fieldLabelClass}>{field.label} máx.</label>
             <Input
               type="number"
               inputMode="decimal"
@@ -340,6 +357,7 @@ export default function PublicListingsFilters({
                 }))
               }
               placeholder="Máximo"
+              className={controlClassName}
             />
           </div>
         </div>
@@ -348,7 +366,7 @@ export default function PublicListingsFilters({
 
     return (
       <div key={field.key} className="space-y-2">
-        <label className="text-sm font-medium text-zinc-700">{field.label}</label>
+        <label className={fieldLabelClass}>{field.label}</label>
         <Input
           value={value}
           onChange={(e) =>
@@ -358,32 +376,39 @@ export default function PublicListingsFilters({
             }))
           }
           placeholder={`Buscar por ${field.label.toLowerCase()}`}
+          className={controlClassName}
         />
       </div>
     );
   }
 
   const filtersBody = (
-    <div className="space-y-5">
+    <form
+      className="space-y-5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        applyFilters();
+      }}
+    >
       <div className="space-y-2">
-        <label className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Buscar</label>
+        <label className={fieldLabelClass}>Buscar</label>
         <div className="relative">
-          <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" />
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Título o palabra clave"
-            className="h-12 w-full !rounded-2xl !border-white/40 !bg-white/60 pl-11 text-sm font-medium shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] backdrop-blur-md transition-all focus:!bg-white dark:!border-white/10 dark:!bg-black/20 dark:focus:!bg-black/40"
+            className={`${controlClassName} pl-10`}
           />
         </div>
       </div>
 
       <div className="space-y-2">
-        <label className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Categoría</label>
+        <label className={fieldLabelClass}>Categoría</label>
         <select
           value={categoryId}
           onChange={(e) => setCategoryId(e.target.value)}
-          className="flex h-12 w-full rounded-2xl border border-white/40 bg-white/60 px-4 text-sm font-medium text-zinc-900 shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] outline-none backdrop-blur-md transition-all focus:border-primary/50 focus:bg-white dark:border-white/10 dark:bg-black/20 dark:text-zinc-100 dark:focus:border-primary/50 dark:focus:bg-black/40"
+          className={selectClassName}
         >
           <option value="">Todas</option>
           {categories.map((category) => (
@@ -396,35 +421,35 @@ export default function PublicListingsFilters({
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-2">
-          <label className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Temp. Min</label>
+          <label className={fieldLabelClass}>Precio mínimo</label>
           <Input
             type="number"
             inputMode="decimal"
             value={minPrice}
             onChange={(e) => setMinPrice(e.target.value)}
             placeholder="0"
-            className="h-12 !rounded-2xl !border-white/40 !bg-white/60 text-sm font-medium shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] backdrop-blur-md transition-all focus:!bg-white dark:!border-white/10 dark:!bg-black/20 dark:focus:!bg-black/40"
+            className={controlClassName}
           />
         </div>
         <div className="space-y-2">
-          <label className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Temp. Max</label>
+          <label className={fieldLabelClass}>Precio máximo</label>
           <Input
             type="number"
             inputMode="decimal"
             value={maxPrice}
             onChange={(e) => setMaxPrice(e.target.value)}
             placeholder="1000"
-            className="h-12 !rounded-2xl !border-white/40 !bg-white/60 text-sm font-medium shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] backdrop-blur-md transition-all focus:!bg-white dark:!border-white/10 dark:!bg-black/20 dark:focus:!bg-black/40"
+            className={controlClassName}
           />
         </div>
       </div>
 
       <div className="space-y-2">
-        <label className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Ordenar por</label>
+        <label className={fieldLabelClass}>Ordenar por</label>
         <select
           value={sort}
           onChange={(e) => setSort(e.target.value)}
-          className="flex h-12 w-full rounded-2xl border border-white/40 bg-white/60 px-4 text-sm font-medium text-zinc-900 shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] outline-none backdrop-blur-md transition-all focus:border-primary/50 focus:bg-white dark:border-white/10 dark:bg-black/20 dark:text-zinc-100 dark:focus:border-primary/50 dark:focus:bg-black/40"
+          className={selectClassName}
         >
           <option value="newest">Más recientes</option>
           <option value="oldest">Más antiguos</option>
@@ -435,24 +460,20 @@ export default function PublicListingsFilters({
 
       {(loadingFields || fields.length > 0) && (
         <>
-          <Separator className="opacity-50 dark:opacity-20" />
+          <Separator className="opacity-60 dark:opacity-20" />
           <div className="space-y-4">
-            <div>
+            <div className="space-y-1">
               <h3 className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
                 Filtros específicos
               </h3>
-              <p className="mt-1 flex items-center gap-1.5 text-xs font-medium text-primary">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary/40 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
-                </span>
-                Se ajustan por categoría
+              <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                Se adaptan según la categoría seleccionada.
               </p>
             </div>
 
             {loadingFields ? (
-              <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-500">
-                Cargando campos…
+              <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-3.5 py-3 text-sm text-zinc-500 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-400">
+                Cargando campos...
               </div>
             ) : (
               <div className="space-y-4">{fields.map(renderDynamicField)}</div>
@@ -463,9 +484,9 @@ export default function PublicListingsFilters({
 
       {activeFilters.length > 0 && (
         <>
-          <Separator />
+          <Separator className="opacity-60 dark:opacity-20" />
           <div className="space-y-3">
-            <div className="text-sm font-semibold tracking-tight text-zinc-900">
+            <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
               Filtros activos
             </div>
 
@@ -475,7 +496,7 @@ export default function PublicListingsFilters({
                   key={`${item.key}-${item.label}`}
                   type="button"
                   onClick={() => removeOneFilter(item.key)}
-                  className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100"
+                  className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
                 >
                   {item.label}
                   <X className="h-3.5 w-3.5" />
@@ -486,26 +507,37 @@ export default function PublicListingsFilters({
         </>
       )}
 
-      <div className="mt-4 flex flex-col gap-2.5 pt-2">
-        <Button onClick={applyFilters} className="h-12 w-full rounded-2xl text-sm font-bold shadow-md shadow-primary/20 transition-all hover:scale-[1.02] hover:shadow-lg dark:shadow-primary/10">
+      <div className="space-y-2 pt-2">
+        <Button
+          type="submit"
+          className="h-12 w-full rounded-xl bg-zinc-900 text-sm font-semibold text-white shadow-lg shadow-zinc-900/15 transition hover:bg-zinc-800"
+        >
           Aplicar filtros
         </Button>
-        <Button variant="outline" onClick={clearAll} className="h-12 w-full rounded-2xl border-white/50 bg-white/50 text-sm font-semibold backdrop-blur-sm transition-all hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900/50 dark:hover:bg-zinc-800">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={clearAll}
+          className="h-12 w-full rounded-xl border-zinc-200 bg-white text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+        >
           Limpiar todo
         </Button>
       </div>
-    </div>
+    </form>
   );
 
   if (variant === "button") {
     return (
       <Sheet>
         <SheetTrigger asChild>
-          <Button variant="outline" className="gap-2">
+          <Button
+            variant="outline"
+            className="h-11 rounded-xl border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+          >
             <SlidersHorizontal className="h-4 w-4" />
             Filtros
             {activeFilters.length > 0 ? (
-              <Badge variant="secondary" className="ml-1">
+              <Badge className="ml-1 rounded-full bg-zinc-900 px-2 py-0.5 text-[10px] text-white dark:bg-zinc-100 dark:text-zinc-900">
                 {activeFilters.length}
               </Badge>
             ) : null}
@@ -513,11 +545,16 @@ export default function PublicListingsFilters({
         </SheetTrigger>
 
         <SheetContent
-          side="bottom"
-          className="max-h-[85vh] overflow-y-auto rounded-t-3xl border-x-0 border-b-0 bg-white p-5"
+          side="left"
+          className="w-full max-w-full overflow-y-auto border-r-zinc-200 bg-white px-5 pb-8 pt-10 dark:border-white/10 dark:bg-zinc-950 sm:max-w-md"
         >
-          <SheetHeader className="mb-4 text-left">
-            <SheetTitle>Filtros</SheetTitle>
+          <SheetHeader className="mb-5 text-left">
+            <SheetTitle className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+              Filtros de búsqueda
+            </SheetTitle>
+            <SheetDescription className="text-sm text-zinc-500 dark:text-zinc-400">
+              Ajusta categoría, precio y criterios para encontrar mejores resultados.
+            </SheetDescription>
           </SheetHeader>
           {filtersBody}
         </SheetContent>
@@ -526,9 +563,24 @@ export default function PublicListingsFilters({
   }
 
   return (
-    <Card className="sticky top-24 overflow-hidden rounded-3xl border border-white/50 bg-white/40 p-6 shadow-xl shadow-black/5 ring-1 ring-zinc-200/50 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/40 dark:ring-white/5 dark:shadow-black/50">
-      <div className="absolute inset-0 bg-gradient-to-b from-white/40 to-white/0 pointer-events-none dark:from-white/5" />
-      <div className="relative z-10">{filtersBody}</div>
+    <Card className="sticky top-24 overflow-hidden rounded-[1.5rem] border border-zinc-200/70 bg-white p-5 shadow-[0_20px_40px_-30px_rgba(15,23,42,0.5)] dark:border-white/10 dark:bg-zinc-900/70">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+            Filtrar publicaciones
+          </h2>
+          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+            Controla búsqueda, precio y categoría.
+          </p>
+        </div>
+        {activeFilters.length > 0 ? (
+          <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-zinc-900 px-2 text-[11px] font-semibold text-white dark:bg-zinc-100 dark:text-zinc-900">
+            {activeFilters.length}
+          </span>
+        ) : null}
+      </div>
+
+      {filtersBody}
     </Card>
   );
 }

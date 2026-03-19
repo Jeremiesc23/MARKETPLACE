@@ -233,7 +233,7 @@ export default function AdminNewSitePage() {
         </div>
 
         <Button asChild variant="outline">
-          <Link href="/dashboard/admin/sites">Volver a sitios</Link>
+          <Link href="/admin/sites">Volver a sitios</Link>
         </Button>
       </div>
 

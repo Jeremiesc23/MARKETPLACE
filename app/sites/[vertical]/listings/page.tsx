@@ -1,15 +1,39 @@
-// app/sites/[vertical]/listings/page.tsx
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { headers } from "next/headers";
 
-import { Card } from "@/components/ui/card";
+import { ArrowLeft, ChevronLeft, ChevronRight, MessageCircle, SearchX } from "lucide-react";
+
 import { buildInstagramUrl, buildWhatsAppUrl } from "@/lib/utils";
 import { searchPublicListings } from "@/src/server/modules/listings/listings.service";
 import { getSiteFromHeaders } from "@/src/server/shared/tenant";
 
 import { ListingCard } from "../components/ListingCard";
 import PublicListingsFilters from "./PublicListingsFilters";
+
+type SiteTenant = {
+  id: number | string;
+  vertical_slug: string;
+  name?: string | null;
+  subdomain?: string | null;
+  whatsapp_phone?: string | null;
+  facebook_url?: string | null;
+  instagram_username?: string | null;
+};
+
+type PublicListingItem = {
+  id: number | string;
+  title?: string | null;
+  price?: number | string | null;
+  currency?: string | null;
+  location_text?: string | null;
+  category_name?: string | null;
+  categoryName?: string | null;
+  cover_url?: string | null;
+  coverUrl?: string | null;
+  images_count?: number | string | null;
+  created_at?: string | null;
+};
 
 function makeHref(
   sp: Record<string, string | string[] | undefined>,
@@ -27,6 +51,76 @@ function makeHref(
   return `?${usp.toString()}`;
 }
 
+function formatPriceLabel(price: unknown, currency: unknown) {
+  const amount = Number(price);
+  if (!Number.isFinite(amount)) return "Precio a consultar";
+
+  const code =
+    typeof currency === "string" && currency.trim()
+      ? currency.trim().toUpperCase()
+      : "USD";
+
+  try {
+    return new Intl.NumberFormat("es-SV", {
+      style: "currency",
+      currency: code,
+      maximumFractionDigits: 0,
+    }).format(amount);
+  } catch {
+    return `${amount.toLocaleString("es-SV")} ${code}`.trim();
+  }
+}
+
+function formatListingDate(value: unknown) {
+  if (typeof value !== "string" || !value) return null;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return new Intl.DateTimeFormat("es-SV", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
+function buildPaginationWindow(currentPage: number, totalPages: number) {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, i) => i + 1) as Array<
+      number | "ellipsis"
+    >;
+  }
+
+  const pages = new Set([1, totalPages, currentPage, currentPage - 1, currentPage + 1]);
+
+  if (currentPage <= 3) {
+    pages.add(2);
+    pages.add(3);
+    pages.add(4);
+  }
+
+  if (currentPage >= totalPages - 2) {
+    pages.add(totalPages - 1);
+    pages.add(totalPages - 2);
+    pages.add(totalPages - 3);
+  }
+
+  const sorted = Array.from(pages)
+    .filter((p) => p >= 1 && p <= totalPages)
+    .sort((a, b) => a - b);
+
+  const output: Array<number | "ellipsis"> = [];
+  let prev: number | null = null;
+
+  for (const page of sorted) {
+    if (prev != null && page - prev > 1) output.push("ellipsis");
+    output.push(page);
+    prev = page;
+  }
+
+  return output;
+}
+
 export default async function PublicListingsPage(props: {
   params: Promise<{ vertical: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -34,9 +128,9 @@ export default async function PublicListingsPage(props: {
   await props.params;
   const sp = await props.searchParams;
 
-  let site: any;
+  let site: SiteTenant;
   try {
-    site = await getSiteFromHeaders(await headers());
+    site = (await getSiteFromHeaders(await headers())) as SiteTenant;
   } catch {
     return notFound();
   }
@@ -48,8 +142,15 @@ export default async function PublicListingsPage(props: {
       values: Array.isArray(val) ? val.map(String) : [String(val)],
     }));
 
-  const page = Number(sp.page ?? 1) || 1;
-  const pageSize = Number(sp.pageSize ?? 24) || 24;
+  const page = Math.max(1, Number(sp.page ?? 1) || 1);
+  const pageSize = Math.max(1, Number(sp.pageSize ?? 24) || 24);
+  const rawSort = typeof sp.sort === "string" ? sp.sort : "newest";
+  const sortForSearch: "newest" | "price_asc" | "price_desc" | "relevance" =
+    rawSort === "price_asc" ||
+    rawSort === "price_desc" ||
+    rawSort === "relevance"
+      ? rawSort
+      : "newest";
 
   const { total, items } = await searchPublicListings({
     siteId: Number(site.id),
@@ -60,15 +161,21 @@ export default async function PublicListingsPage(props: {
     categorySlug: typeof sp.category === "string" ? sp.category : undefined,
     minPrice: typeof sp.minPrice === "string" ? Number(sp.minPrice) : undefined,
     maxPrice: typeof sp.maxPrice === "string" ? Number(sp.maxPrice) : undefined,
-    sort: (typeof sp.sort === "string" ? sp.sort : "newest") as any,
+    sort: sortForSearch,
     page,
     pageSize,
     dynRaw,
     useFulltext: process.env.USE_LISTINGS_FULLTEXT === "1",
   });
 
+  const listingItems = (Array.isArray(items) ? items : []) as PublicListingItem[];
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const hasPrev = page > 1;
-  const hasNext = page * pageSize < total;
+  const hasNext = page < totalPages;
+
+  const resultFrom = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const resultTo = total === 0 ? 0 : Math.min(page * pageSize, total);
 
   const baseVerticalHref = "/";
   const baseListingsHref = "/listings";
@@ -81,105 +188,149 @@ export default async function PublicListingsPage(props: {
   const siteFacebookUrl = site.facebook_url ?? null;
   const siteInstagramUrl = buildInstagramUrl(site.instagram_username);
 
+  const paginationWindow = buildPaginationWindow(page, totalPages);
+
   return (
-    <main className="mx-auto max-w-[85rem] space-y-8 px-4 py-8 md:px-6 md:py-12">
-      <section className="relative overflow-hidden rounded-[2rem] border border-white/60 bg-white/40 p-6 shadow-lg shadow-black/[0.03] ring-1 ring-zinc-200/50 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/40 dark:ring-white/5 sm:p-12">
-        <div className="absolute inset-0 bg-gradient-to-br from-primary/10 via-white/50 to-transparent pointer-events-none dark:from-primary/5 dark:via-zinc-900/50" />
-        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div className="flex flex-col items-start gap-4">
+    <main className="mx-auto w-full max-w-[96rem] space-y-7 px-4 pb-12 pt-6 sm:px-6 lg:px-8">
+      <section className="relative overflow-hidden rounded-[2rem] border border-zinc-200/70 bg-white px-6 py-6 shadow-[0_25px_60px_-45px_rgba(15,23,42,0.55)] ring-1 ring-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/60 dark:ring-white/10 sm:px-8 sm:py-7">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.14),transparent_58%)] dark:bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.2),transparent_60%)]" />
+
+        <div className="relative flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+          <div className="space-y-4">
             <Link
               href={baseVerticalHref}
-              className="inline-flex items-center gap-1.5 rounded-full bg-zinc-100/80 px-3 py-1 text-xs font-semibold text-zinc-600 transition-colors hover:bg-zinc-200 hover:text-zinc-900 dark:bg-zinc-800/80 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+              className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
             >
-              <svg
-                viewBox="0 0 24 24"
-                className="h-3.5 w-3.5 fill-none stroke-current stroke-2"
-              >
-                <polyline points="15 18 9 12 15 6" />
-              </svg>
+              <ArrowLeft className="h-3.5 w-3.5" />
               Volver al inicio
             </Link>
 
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="inline-flex h-6 items-center rounded-full bg-primary/10 px-2.5 text-[10px] font-bold uppercase tracking-widest text-primary dark:bg-primary/20">
-                  {site.vertical_slug}
-                </span>
-              </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-600 dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-300">
+                {site.vertical_slug}
+              </span>
+              <span className="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary dark:border-primary/25 dark:bg-primary/15">
+                {site.name ?? site.subdomain}
+              </span>
+            </div>
 
-              <h1 className="text-4xl font-extrabold tracking-tight text-zinc-900 dark:text-white sm:text-5xl">
+            <div className="space-y-2">
+              <h1 className="text-3xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50 sm:text-4xl">
                 Catálogo de Publicaciones
               </h1>
-
-              <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-white/50 bg-white/50 px-4 py-1.5 text-sm font-medium text-zinc-600 shadow-sm backdrop-blur-md dark:border-white/10 dark:bg-zinc-800/50 dark:text-zinc-300">
-                <span className="flex h-2 w-2 rounded-full bg-primary" />
-                <span>
-                  <strong className="font-bold text-zinc-900 dark:text-zinc-100">{total}</strong> publicaciones disponibles
-                  {q && (
-                    <>
-                      {" "}para <strong className="font-bold text-zinc-900 dark:text-zinc-100">“{q}”</strong>
-                    </>
-                  )}
-                </span>
-              </div>
+              <p className="max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-300 sm:text-base">
+                Explora publicaciones activas con filtros rápidos, precio claro y navegación optimizada para encontrar opciones más rápido.
+              </p>
             </div>
-            
-            <div className="lg:hidden mt-2">
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              <span className="inline-flex items-center rounded-full border border-zinc-200 bg-white px-4 py-1.5 text-sm font-semibold text-zinc-700 shadow-sm dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-200">
+                {total.toLocaleString("es-SV")} publicaciones disponibles
+              </span>
+              {q ? (
+                <span className="inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-4 py-1.5 text-sm font-medium text-zinc-600 dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-300">
+                  Búsqueda actual: “{q}”
+                </span>
+              ) : null}
+            </div>
+
+            <div className="xl:hidden">
               <PublicListingsFilters variant="button" />
             </div>
           </div>
 
-          {(siteWhatsappUrl || siteFacebookUrl || siteInstagramUrl) ? (
-            <div className="flex flex-wrap items-center gap-3">
-              {siteWhatsappUrl ? (
-                <a
-                  href={siteWhatsappUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-2 rounded-full bg-[#25D366] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-transform hover:scale-105 hover:shadow-md"
-                >
-                  <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 0 0-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z"/></svg>
-                  WhatsApp
-                </a>
-              ) : null}
-
-              {siteFacebookUrl ? (
-                <a
-                  href={siteFacebookUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-zinc-200/50 bg-white text-zinc-600 shadow-sm transition-all hover:scale-105 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
-                  aria-label="Facebook"
-                >
-                  <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24"><path d="M9 8h-3v4h3v12h5v-12h3.642l.358-4h-4v-1.667c0-.955.192-1.333 1.115-1.333h2.885v-5h-3.808c-3.596 0-5.192 1.583-5.192 4.615v3.385z"/></svg>
-                </a>
-              ) : null}
-
-              {siteInstagramUrl ? (
-                <a
-                  href={siteInstagramUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-zinc-200/50 bg-white text-zinc-600 shadow-sm transition-all hover:scale-105 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
-                  aria-label="Instagram"
-                >
-                  <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/></svg>
-                </a>
-              ) : null}
+          <div className="w-full max-w-md space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-zinc-200/80 bg-white/90 px-4 py-3 dark:border-white/10 dark:bg-zinc-900/80">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-zinc-500 dark:text-zinc-400">
+                  Mostrando
+                </p>
+                <p className="mt-1 text-lg font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+                  {resultFrom}-{resultTo}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-zinc-200/80 bg-white/90 px-4 py-3 dark:border-white/10 dark:bg-zinc-900/80">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-zinc-500 dark:text-zinc-400">
+                  Página
+                </p>
+                <p className="mt-1 text-lg font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+                  {page} / {totalPages}
+                </p>
+              </div>
             </div>
-          ) : null}
+
+            {(siteWhatsappUrl || siteFacebookUrl || siteInstagramUrl) && (
+              <div className="rounded-2xl border border-zinc-200/80 bg-white/90 p-3.5 dark:border-white/10 dark:bg-zinc-900/80">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-zinc-500 dark:text-zinc-400">
+                  Canales de contacto
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  {siteWhatsappUrl ? (
+                    <a
+                      href={siteWhatsappUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-2 rounded-xl bg-[#25D366] px-3.5 py-2 text-sm font-semibold text-white transition hover:brightness-95"
+                    >
+                      <MessageCircle className="h-4 w-4" />
+                      WhatsApp
+                    </a>
+                  ) : null}
+
+                  {siteFacebookUrl ? (
+                    <a
+                      href={siteFacebookUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label="Facebook"
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-200 bg-white text-zinc-600 transition hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    >
+                      <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M9 8h-3v4h3v12h5v-12h3.642l.358-4h-4v-1.667c0-.955.192-1.333 1.115-1.333h2.885v-5h-3.808c-3.596 0-5.192 1.583-5.192 4.615v3.385z" />
+                      </svg>
+                    </a>
+                  ) : null}
+
+                  {siteInstagramUrl ? (
+                    <a
+                      href={siteInstagramUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label="Instagram"
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-200 bg-white text-zinc-600 transition hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    >
+                      <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z" />
+                      </svg>
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </section>
 
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="hidden lg:block">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <aside className="hidden xl:block">
           <PublicListingsFilters variant="sidebar" />
         </aside>
 
-        <section className="space-y-6">
-          {items.length > 0 ? (
-            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
-              {items.map((l: any) => {
+        <section className="space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-zinc-200/70 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-zinc-900/60">
+            <p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">
+              {total > 0
+                ? `Mostrando ${resultFrom}-${resultTo} de ${total.toLocaleString("es-SV")} resultados`
+                : "No hay resultados para los filtros actuales"}
+            </p>
+            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-zinc-400">
+              Ordena y filtra para encontrar antes
+            </p>
+          </div>
+
+          {listingItems.length > 0 ? (
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 2xl:grid-cols-3">
+              {listingItems.map((l) => {
                 const coverUrl = l.cover_url ?? l.coverUrl ?? null;
                 const locationText =
                   typeof l.location_text === "string" ? l.location_text : "";
@@ -189,20 +340,15 @@ export default async function PublicListingsPage(props: {
                     : typeof l.categoryName === "string"
                       ? l.categoryName
                       : "";
-                const imagesCount = Number(l.images_count ?? 0);
-                const priceLabel =
-                  l.price != null
-                    ? `${l.price} ${l.currency ?? ""}`.trim()
-                    : "-";
 
-                const meta = [
+                const imagesCount = Number(l.images_count ?? 0);
+                const publishedAt = formatListingDate(l.created_at);
+
+                const metaItems = [
                   locationText || null,
                   `${imagesCount} foto${imagesCount === 1 ? "" : "s"}`,
-                ]
-                  .filter(Boolean)
-                  .join(" • ");
-
-                const badges = [categoryName].filter(Boolean);
+                  publishedAt ? `Publicado ${publishedAt}` : null,
+                ].filter(Boolean) as string[];
 
                 return (
                   <ListingCard
@@ -210,40 +356,35 @@ export default async function PublicListingsPage(props: {
                     href={`/listings/${l.id}`}
                     title={String(l.title ?? "Sin título")}
                     coverUrl={coverUrl}
-                    priceLabel={priceLabel}
-                    meta={meta}
-                    badges={badges}
-                    whatsappUrl={siteWhatsappUrl}
-                    facebookUrl={siteFacebookUrl}
-                    instagramUrl={siteInstagramUrl}
+                    priceLabel={formatPriceLabel(l.price, l.currency)}
+                    metaItems={metaItems}
+                    badges={[categoryName].filter(Boolean)}
                   />
                 );
               })}
             </div>
           ) : (
-            <div className="flex h-full min-h-[400px] flex-col items-center justify-center rounded-[2rem] border border-white/60 bg-white/40 p-8 text-center shadow-sm ring-1 ring-zinc-200/50 backdrop-blur-md dark:border-white/10 dark:bg-zinc-900/40 dark:ring-white/5">
-              <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-zinc-100 dark:bg-zinc-800">
-                <svg className="h-8 w-8 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
+            <div className="flex min-h-[360px] flex-col items-center justify-center rounded-[1.75rem] border border-dashed border-zinc-300 bg-white px-6 py-10 text-center dark:border-white/15 dark:bg-zinc-900/50">
+              <div className="mb-4 rounded-2xl bg-zinc-100 p-3 dark:bg-zinc-800/80">
+                <SearchX className="h-7 w-7 text-zinc-500 dark:text-zinc-300" />
               </div>
-              <h3 className="text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-                No encontramos publicaciones
+              <h3 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+                No encontramos publicaciones con estos filtros
               </h3>
-              <p className="mt-2 max-w-sm text-base text-zinc-500 dark:text-zinc-400">
-                Prueba ajustando los filtros de búsqueda o revisando otra categoría para encontrar lo que buscas.
+              <p className="mt-2 max-w-md text-sm text-zinc-600 dark:text-zinc-300">
+                Ajusta la búsqueda, amplía el rango de precio o limpia filtros para volver a ver todo el catálogo disponible.
               </p>
 
-              <div className="mt-8 flex flex-wrap justify-center gap-3">
+              <div className="mt-6 flex flex-wrap justify-center gap-2.5">
                 <Link
                   href={baseListingsHref}
-                  className="rounded-full bg-zinc-900 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:scale-105 hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
+                  className="inline-flex items-center rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
                 >
                   Limpiar filtros
                 </Link>
                 <Link
                   href={baseVerticalHref}
-                  className="rounded-full border border-zinc-200 bg-white px-6 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm transition-all hover:scale-105 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                  className="inline-flex items-center rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
                 >
                   Volver al inicio
                 </Link>
@@ -252,44 +393,85 @@ export default async function PublicListingsPage(props: {
           )}
 
           {total > 0 ? (
-            <div className="flex items-center justify-between gap-4 rounded-3xl border border-white/60 bg-white/40 p-4 shadow-sm ring-1 ring-zinc-200/50 backdrop-blur-md dark:border-white/10 dark:bg-zinc-900/40 dark:ring-white/5">
-              {hasPrev ? (
-                <Link
-                  href={makeHref(sp, page - 1)}
-                  className="inline-flex items-center gap-1.5 rounded-2xl border border-white/50 bg-white px-5 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm transition-all hover:-translate-x-1 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-                >
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-                  Anterior
-                </Link>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 rounded-2xl px-5 py-2.5 text-sm font-semibold text-zinc-300 dark:text-zinc-600">
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-                  Anterior
-                </span>
-              )}
+            <div className="rounded-2xl border border-zinc-200/70 bg-white p-3.5 shadow-sm dark:border-white/10 dark:bg-zinc-900/60 sm:p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">
+                  Página {page} de {totalPages}
+                </p>
 
-              <div className="rounded-full bg-black/5 px-4 py-1.5 text-sm font-semibold text-zinc-600 dark:bg-white/5 dark:text-zinc-400">
-                Página <span className="text-zinc-900 dark:text-zinc-100">{page}</span>
+                <nav
+                  aria-label="Paginación de publicaciones"
+                  className="flex items-center gap-1.5"
+                >
+                  {hasPrev ? (
+                    <Link
+                      href={makeHref(sp, page - 1)}
+                      className="inline-flex h-9 items-center gap-1 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                      <span className="hidden sm:inline">Anterior</span>
+                    </Link>
+                  ) : (
+                    <span className="inline-flex h-9 items-center gap-1 rounded-xl border border-zinc-200/60 bg-zinc-50 px-3 text-sm font-medium text-zinc-400 dark:border-white/10 dark:bg-zinc-900/40 dark:text-zinc-600">
+                      <ChevronLeft className="h-4 w-4" />
+                      <span className="hidden sm:inline">Anterior</span>
+                    </span>
+                  )}
+
+                  {paginationWindow.map((entry, idx) => {
+                    if (entry === "ellipsis") {
+                      return (
+                        <span
+                          key={`ellipsis-${idx}`}
+                          className="inline-flex h-9 w-9 items-center justify-center text-sm text-zinc-400"
+                        >
+                          ...
+                        </span>
+                      );
+                    }
+
+                    const isCurrent = entry === page;
+
+                    return isCurrent ? (
+                      <span
+                        key={entry}
+                        aria-current="page"
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-900 text-sm font-semibold text-white dark:bg-zinc-100 dark:text-zinc-900"
+                      >
+                        {entry}
+                      </span>
+                    ) : (
+                      <Link
+                        key={entry}
+                        href={makeHref(sp, entry)}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-200 bg-white text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                      >
+                        {entry}
+                      </Link>
+                    );
+                  })}
+
+                  {hasNext ? (
+                    <Link
+                      href={makeHref(sp, page + 1)}
+                      className="inline-flex h-9 items-center gap-1 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                    >
+                      <span className="hidden sm:inline">Siguiente</span>
+                      <ChevronRight className="h-4 w-4" />
+                    </Link>
+                  ) : (
+                    <span className="inline-flex h-9 items-center gap-1 rounded-xl border border-zinc-200/60 bg-zinc-50 px-3 text-sm font-medium text-zinc-400 dark:border-white/10 dark:bg-zinc-900/40 dark:text-zinc-600">
+                      <span className="hidden sm:inline">Siguiente</span>
+                      <ChevronRight className="h-4 w-4" />
+                    </span>
+                  )}
+                </nav>
               </div>
-
-              {hasNext ? (
-                <Link
-                  href={makeHref(sp, page + 1)}
-                  className="inline-flex items-center gap-1.5 rounded-2xl border border-white/50 bg-white px-5 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm transition-all hover:translate-x-1 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-                >
-                  Siguiente
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                </Link>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 rounded-2xl px-5 py-2.5 text-sm font-semibold text-zinc-300 dark:text-zinc-600">
-                  Siguiente
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                </span>
-              )}
             </div>
           ) : null}
         </section>
       </div>
+
     </main>
   );
 }

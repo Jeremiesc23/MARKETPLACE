@@ -7,8 +7,8 @@ export type AdminFieldRow = {
   key: string;
   label: string;
   type: "text" | "number" | "boolean" | "select";
-  options: any | null;
-  constraints: any | null;
+  options: unknown | null;
+  constraints: unknown | null;
   is_active: number;
   created_at: string | null;
 };
@@ -19,13 +19,13 @@ type FieldPacket = RowDataPacket & {
   key: string;
   label: string;
   type: "text" | "number" | "boolean" | "select";
-  options: any;
-  constraints: any;
+  options: unknown;
+  constraints: unknown;
   is_active: number;
   created_at: Date | string | null;
 };
 
-function parseMaybeJson(v: any) {
+function parseMaybeJson(v: unknown) {
   if (v == null) return null;
   if (typeof v === "string") {
     try { return JSON.parse(v); } catch { return v; }
@@ -49,14 +49,24 @@ function mapField(r: FieldPacket): AdminFieldRow {
 
 export async function adminListFieldsByVertical(verticalSlug: string) {
   const db = getDb();
+  const normalizedVertical = verticalSlug.trim().toLowerCase();
+  const likeVertical = `%${normalizedVertical}%`;
+  const prefixVertical = `${normalizedVertical}%`;
   const [rows] = await db.query<FieldPacket[]>(
     `
     SELECT id, vertical_slug, \`key\` AS \`key\`, label, type, options, constraints, is_active, created_at
     FROM fields
-    WHERE vertical_slug=?
-    ORDER BY id DESC
+    WHERE LOWER(vertical_slug) LIKE ?
+    ORDER BY
+      CASE
+        WHEN LOWER(vertical_slug) = ? THEN 0
+        WHEN LOWER(vertical_slug) LIKE ? THEN 1
+        ELSE 2
+      END,
+      vertical_slug ASC,
+      id DESC
     `,
-    [verticalSlug]
+    [likeVertical, normalizedVertical, prefixVertical]
   );
   return rows.map(mapField);
 }
@@ -80,8 +90,8 @@ export async function adminCreateField(input: {
   key: string;
   label: string;
   type: "text" | "number" | "boolean" | "select";
-  options: any | null;
-  constraints: any | null;
+  options: unknown | null;
+  constraints: unknown | null;
   isActive: boolean;
 }) {
   const db = getDb();
@@ -107,12 +117,12 @@ export async function adminCreateField(input: {
 export async function adminUpdateField(fieldId: number, patch: {
   label?: string;
   type?: "text" | "number" | "boolean" | "select";
-  options?: any | null;
-  constraints?: any | null;
+  options?: unknown | null;
+  constraints?: unknown | null;
   isActive?: boolean;
 }) {
   const sets: string[] = [];
-  const vals: any[] = [];
+  const vals: unknown[] = [];
 
   if (patch.label !== undefined) { sets.push("label=?"); vals.push(patch.label); }
   if (patch.type !== undefined) { sets.push("type=?"); vals.push(patch.type); }

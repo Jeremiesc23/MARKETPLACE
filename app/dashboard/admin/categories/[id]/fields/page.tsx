@@ -155,7 +155,7 @@ export default function AdminCategoryFieldsPage() {
         </div>
 
         <Button variant="outline" asChild>
-          <Link href="/dashboard/admin/categories">Volver</Link>
+          <Link href="/admin/categories">Volver</Link>
         </Button>
       </div>
 
@@ -179,7 +179,7 @@ export default function AdminCategoryFieldsPage() {
           <Button onClick={addField}>Agregar</Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          Tip: también puedes ir a <Link className="underline" href="/dashboard/admin/fields">Fields</Link> y usar “Aplicar a todas las categorías”.
+          Tip: también puedes ir a <Link className="underline" href="/admin/fields">Fields</Link> y usar “Aplicar a todas las categorías”.
         </p>
       </Card>
 

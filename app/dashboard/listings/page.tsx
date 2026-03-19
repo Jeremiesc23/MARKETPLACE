@@ -4,6 +4,12 @@ import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+import {
+  buildTenantUrl,
+  getHostFromHeaders,
+  getOriginFromHeaders,
+  isTenantHost,
+} from "@/lib/host-routing";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -21,8 +27,6 @@ type ListingRow = {
   imagesCount: number;
 };
 
-type HeadersLike = { get(name: string): string | null };
-
 type MeResponse = {
   ok: boolean;
   user?: {
@@ -32,70 +36,6 @@ type MeResponse = {
     siteSubdomain?: string | null;
   };
 };
-
-function firstHeaderValue(value: string | null) {
-  return value?.split(",")[0]?.trim() ?? "";
-}
-
-function getHost(h: HeadersLike) {
-  return firstHeaderValue(h.get("x-forwarded-host") ?? h.get("host")).toLowerCase();
-}
-
-function getProto(h: HeadersLike) {
-  return firstHeaderValue(h.get("x-forwarded-proto")) || "http";
-}
-
-function getBaseUrl(h: HeadersLike) {
-  const host = getHost(h);
-  const proto = getProto(h);
-  if (!host) throw new Error("No se pudo resolver el host de la petición");
-  return `${proto}://${host}`;
-}
-
-function splitHostPort(host: string) {
-  const [hostname, port] = host.split(":");
-  return { hostname, port: port ? `:${port}` : "" };
-}
-
-function isIpv4(hostname: string) {
-  return /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname);
-}
-
-const ROOT_DOMAIN = (process.env.ROOT_DOMAIN || "").toLowerCase();
-const DEV_ROOT_DOMAIN = (process.env.DEV_ROOT_DOMAIN || "lvh.me").toLowerCase();
-
-function getApexHostname(hostname: string) {
-  if (ROOT_DOMAIN && (hostname === ROOT_DOMAIN || hostname.endsWith(`.${ROOT_DOMAIN}`))) {
-    return ROOT_DOMAIN;
-  }
-  if (DEV_ROOT_DOMAIN && (hostname === DEV_ROOT_DOMAIN || hostname.endsWith(`.${DEV_ROOT_DOMAIN}`))) {
-    return DEV_ROOT_DOMAIN;
-  }
-  return hostname;
-}
-
-function getTenantSubdomain(host: string) {
-  const { hostname } = splitHostPort(host);
-  if (ROOT_DOMAIN && hostname.endsWith(`.${ROOT_DOMAIN}`)) {
-    return hostname.slice(0, -(`.${ROOT_DOMAIN}`.length));
-  }
-  if (DEV_ROOT_DOMAIN && hostname.endsWith(`.${DEV_ROOT_DOMAIN}`)) {
-    return hostname.slice(0, -(`.${DEV_ROOT_DOMAIN}`.length));
-  }
-  return "";
-}
-
-function isTenantHost(host: string) {
-  return Boolean(getTenantSubdomain(host));
-}
-
-function buildTenantUrl(h: HeadersLike, subdomain: string, pathname: string) {
-  const proto = getProto(h);
-  const host = getHost(h);
-  const { hostname, port } = splitHostPort(host);
-  const apex = getApexHostname(hostname) || hostname;
-  return `${proto}://${subdomain}.${apex}${port}${pathname}`;
-}
 
 function extractArray<T = any>(payload: any): T[] {
   if (Array.isArray(payload)) return payload;
@@ -141,8 +81,8 @@ async function safeJson(res: Response) {
   }
 }
 
-async function getMe(h: HeadersLike): Promise<MeResponse | null> {
-  const baseUrl = getBaseUrl(h);
+async function getMe(h: Headers): Promise<MeResponse | null> {
+  const baseUrl = getOriginFromHeaders(h);
 
   const res = await fetch(`${baseUrl}/api/auth/me`, {
     method: "GET",
@@ -156,7 +96,7 @@ async function getMe(h: HeadersLike): Promise<MeResponse | null> {
 
 async function getDashboardListings(includeDeleted: boolean): Promise<ListingRow[]> {
   const h = await headers();
-  const baseUrl = getBaseUrl(h);
+  const baseUrl = getOriginFromHeaders(h);
 
   const qs = includeDeleted ? "?includeDeleted=1" : "";
   const res = await fetch(`${baseUrl}/api/dashboard/listings${qs}`, {
@@ -206,7 +146,7 @@ export default async function DashboardListingsPage({ searchParams }: { searchPa
     if (!id) return;
 
     const h = await headers();
-    const baseUrl = getBaseUrl(h);
+    const baseUrl = getOriginFromHeaders(h);
 
     const res = await fetch(`${baseUrl}/api/listings/${id}/publish`, {
       method: "POST",
@@ -234,7 +174,7 @@ export default async function DashboardListingsPage({ searchParams }: { searchPa
     if (!id) return;
 
     const h = await headers();
-    const baseUrl = getBaseUrl(h);
+    const baseUrl = getOriginFromHeaders(h);
 
     const res = await fetch(`${baseUrl}/api/listings/${id}/archive`, {
       method: "POST",
@@ -262,7 +202,7 @@ export default async function DashboardListingsPage({ searchParams }: { searchPa
     if (!id) return;
 
     const h = await headers();
-    const baseUrl = getBaseUrl(h);
+    const baseUrl = getOriginFromHeaders(h);
 
     const res = await fetch(`${baseUrl}/api/listings/${id}/restore`, {
       method: "POST",
@@ -294,7 +234,7 @@ export default async function DashboardListingsPage({ searchParams }: { searchPa
     if (message === "Forbidden") {
       const h = await headers();
       const me = await getMe(h);
-      const host = getHost(h);
+      const host = getHostFromHeaders(h);
 
       if (me?.ok && me.user?.role !== "admin" && me.user?.siteSubdomain && !isTenantHost(host)) {
         redirect(buildTenantUrl(h, me.user.siteSubdomain, "/dashboard/listings"));

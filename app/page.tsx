@@ -1,9 +1,9 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-export const dynamic = "force-dynamic";
+import { getOriginFromHeaders } from "@/lib/host-routing";
 
-type HeadersLike = { get(name: string): string | null };
+export const dynamic = "force-dynamic";
 
 type MeResponse = {
   ok: boolean;
@@ -16,27 +16,6 @@ type MeResponse = {
   };
 };
 
-function firstHeaderValue(value: string | null) {
-  return value?.split(",")[0]?.trim() ?? "";
-}
-
-function getProto(h: HeadersLike) {
-  return firstHeaderValue(h.get("x-forwarded-proto")) || "http";
-}
-
-function getHost(h: HeadersLike) {
-  const directHost = firstHeaderValue(h.get("host"));
-  if (directHost) return directHost.toLowerCase();
-
-  return firstHeaderValue(h.get("x-forwarded-host")).toLowerCase();
-}
-
-function getOriginFromHeaders(h: HeadersLike) {
-  const proto = getProto(h);
-  const host = getHost(h) || "localhost:3000";
-  return `${proto}://${host}`;
-}
-
 async function getMe(origin: string, cookie: string): Promise<MeResponse | null> {
   try {
     const res = await fetch(`${origin}/api/auth/me`, {
@@ -47,7 +26,7 @@ async function getMe(origin: string, cookie: string): Promise<MeResponse | null>
 
     if (!res.ok) return null;
     return (await res.json()) as MeResponse;
-  } catch (error) {
+  } catch {
     return null;
   }
 }
@@ -67,5 +46,5 @@ export default async function HomePage() {
     redirect("/change-password");
   }
 
-  redirect("/dashboard");
+  redirect(me.user.role === "admin" ? "/admin" : "/dashboard");
 }

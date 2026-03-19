@@ -1,4 +1,3 @@
-// src/server/shared/gcs.ts
 import path from "node:path";
 import crypto from "node:crypto";
 import { Storage } from "@google-cloud/storage";
@@ -19,9 +18,9 @@ export function getGcsBucketName() {
 function getStorageClient() {
   if (_storage) return _storage;
 
-  const projectId = getEnv("GCP_PROJECT_ID");
+  const projectId = process.env.GCP_PROJECT_ID;
 
-  // ✅ Opción 1: archivo JSON de service account (recomendada en local)
+  // Local: usa archivo JSON si existe
   const keyFile = process.env.GCP_KEY_FILE;
   if (keyFile) {
     const keyFilename = path.isAbsolute(keyFile)
@@ -36,16 +35,10 @@ function getStorageClient() {
     return _storage;
   }
 
-  // ✅ Opción 2: variables separadas (útil en producción)
-  const clientEmail = getEnv("GCP_CLIENT_EMAIL");
-  const privateKey = getEnv("GCP_PRIVATE_KEY").replace(/\\n/g, "\n");
-
+  // Producción / Cloud Run:
+  // usa Application Default Credentials de la service account del servicio
   _storage = new Storage({
     projectId,
-    credentials: {
-      client_email: clientEmail,
-      private_key: privateKey,
-    },
   });
 
   return _storage;
@@ -97,7 +90,11 @@ export function getListingImagesPrefix(siteId: number, listingId: number) {
 }
 
 /** Valida que el objectKey pertenezca al listing/site */
-export function assertListingImageObjectKey(objectKey: string, siteId: number, listingId: number) {
+export function assertListingImageObjectKey(
+  objectKey: string,
+  siteId: number,
+  listingId: number
+) {
   if (!objectKey) throw new AppError("objectKey es requerido", 400);
 
   if (

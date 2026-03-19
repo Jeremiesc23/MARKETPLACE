@@ -22,6 +22,7 @@ steps:
       - --platform=managed
       - --allow-unauthenticated
       - --port=8080
+      - --set-env-vars=GCP_PROJECT_ID=$PROJECT_ID,GCS_BUCKET_NAME=sistema_sas
       - --quiet
 
 options:

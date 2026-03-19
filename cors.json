@@ -3,8 +3,8 @@
     "origin": [
       "https://escovex.com",
       "https://melistoreskin.escovex.com",
-      "http://lvh.me:3000",
-      "http://localhost:3000"
+      "http://localhost:3000",
+      "http://lvh.me:3000"
     ],
     "method": ["GET", "HEAD", "PUT", "OPTIONS"],
     "responseHeader": ["Content-Type", "x-goog-resumable"],

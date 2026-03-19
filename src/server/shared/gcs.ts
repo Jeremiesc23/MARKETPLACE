@@ -36,16 +36,25 @@ function getStorageClient() {
     return _storage;
   }
 
-  // ✅ Opción 2: variables separadas (útil en producción)
-  const clientEmail = getEnv("GCP_CLIENT_EMAIL");
-  const privateKey = getEnv("GCP_PRIVATE_KEY").replace(/\\n/g, "\n");
+  // ✅ Opción 2: variables separadas (útil cuando no quieres montar un JSON)
+  const clientEmail = process.env.GCP_CLIENT_EMAIL;
+  const privateKey = process.env.GCP_PRIVATE_KEY;
 
+  if (clientEmail && privateKey) {
+    _storage = new Storage({
+      projectId,
+      credentials: {
+        client_email: clientEmail,
+        private_key: privateKey.replace(/\\n/g, "\n"),
+      },
+    });
+
+    return _storage;
+  }
+
+  // ✅ Opción 3: Application Default Credentials (ideal en Cloud Run)
   _storage = new Storage({
     projectId,
-    credentials: {
-      client_email: clientEmail,
-      private_key: privateKey,
-    },
   });
 
   return _storage;

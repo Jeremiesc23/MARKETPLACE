@@ -14,6 +14,28 @@ const RESERVED_SUBDOMAINS = new Set([
   "127.0.0.1",
 ]);
 
+function isIpAddress(hostname: string) {
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname);
+}
+
+function inferApexHostname(hostname: string) {
+  const normalized = hostname.toLowerCase();
+  if (!normalized) return "";
+
+  if (normalized === "localhost" || isIpAddress(normalized)) {
+    return normalized;
+  }
+
+  const parts = normalized.split(".").filter(Boolean);
+  if (parts.length <= 2) {
+    return normalized;
+  }
+
+  // Fallback for runtime environments where ROOT_DOMAIN is missing:
+  // assume a standard apex like tenant.example.com -> example.com.
+  return parts.slice(-2).join(".");
+}
+
 export function isAllowedTenantSubdomain(value: string) {
   const normalized = value.trim().toLowerCase();
   if (!normalized || RESERVED_SUBDOMAINS.has(normalized)) return false;
@@ -67,11 +89,12 @@ export function getApexHostname(hostname: string) {
     return DEV_ROOT_DOMAIN;
   }
 
-  return normalized;
+  return inferApexHostname(normalized);
 }
 
 export function isRootHost(host: string) {
   const { hostname } = splitHostPort(host);
+  const apex = getApexHostname(hostname);
 
   const isLocalRoot =
     hostname === "localhost" ||
@@ -79,27 +102,21 @@ export function isRootHost(host: string) {
     hostname === DEV_ROOT_DOMAIN;
 
   const isProdRoot =
-    !!ROOT_DOMAIN &&
-    (hostname === ROOT_DOMAIN || hostname === `www.${ROOT_DOMAIN}`);
+    hostname === apex || (!!ROOT_DOMAIN && hostname === `www.${ROOT_DOMAIN}`);
 
   return isLocalRoot || isProdRoot;
 }
 
 export function extractTenantSubdomain(host: string | null) {
   const { hostname } = splitHostPort(host ?? "");
+  const apex = getApexHostname(hostname);
 
   if (!hostname || isRootHost(hostname)) {
     return "";
   }
 
-  if (ROOT_DOMAIN && hostname.endsWith(`.${ROOT_DOMAIN}`)) {
-    const subdomain = hostname.slice(0, -(`.${ROOT_DOMAIN}`.length));
-    if (!isAllowedTenantSubdomain(subdomain)) return "";
-    return subdomain;
-  }
-
-  if (DEV_ROOT_DOMAIN && hostname.endsWith(`.${DEV_ROOT_DOMAIN}`)) {
-    const subdomain = hostname.slice(0, -(`.${DEV_ROOT_DOMAIN}`.length));
+  if (apex && hostname.endsWith(`.${apex}`)) {
+    const subdomain = hostname.slice(0, -(`.${apex}`.length));
     if (!isAllowedTenantSubdomain(subdomain)) return "";
     return subdomain;
   }

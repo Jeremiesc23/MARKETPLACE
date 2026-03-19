@@ -14,7 +14,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 
 function LoginContent() {
   const sp = useSearchParams();
-  const next = sp.get("next") || "/dashboard/listings";
+  const requestedNext = sp.get("next");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -49,7 +49,16 @@ function LoginContent() {
         return;
       }
 
-      window.location.assign(next);
+      const fallbackNext =
+        data?.user?.role === "admin" ? "/admin" : "/dashboard";
+
+      const destination =
+        data?.user?.role === "admin" &&
+        (!requestedNext || requestedNext.startsWith("/dashboard"))
+          ? "/admin"
+          : requestedNext || fallbackNext;
+
+      window.location.assign(destination);
     } catch {
       setMsg("No se pudo iniciar sesión");
     } finally {

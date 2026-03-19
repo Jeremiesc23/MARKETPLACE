@@ -22,6 +22,7 @@ steps:
       - --platform=managed
       - --allow-unauthenticated
       - --port=8080
+      - --update-env-vars=NODE_ENV=production,ROOT_DOMAIN=escovex.com,COOKIE_DOMAIN=.escovex.com,COOKIE_NAME=session,GCS_BUCKET_NAME=sistema_sas,GCP_PROJECT_ID=$PROJECT_ID
       - --quiet
 
 options:

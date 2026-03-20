@@ -18,7 +18,7 @@ function getSecret() {
 }
 
 export function signSession(payload: SessionUser) {
-  return jwt.sign(payload, getSecret(), { expiresIn: "7d" });
+  return jwt.sign(payload, getSecret(), { expiresIn: "3h" });
 }
 
 function parseCookies(cookieHeader: string | null): Record<string, string> {

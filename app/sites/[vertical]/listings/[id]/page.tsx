@@ -199,7 +199,7 @@ export default async function PublicListingDetailPage(props: {
               <div className="space-y-5">
                 <h2 className="flex items-center gap-3 text-2xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-100">
                   <span className="h-8 w-1.5 rounded-full bg-primary" />
-                  Descripción del vendedor
+                  Descripción del Producto
                 </h2>
                 <div className="prose prose-zinc max-w-none text-[15px] leading-relaxed text-zinc-600 dark:prose-invert dark:text-zinc-400">
                   {description.split('\n').map((paragraph: string, i: number) => (
